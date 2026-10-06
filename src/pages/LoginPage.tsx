@@ -46,6 +46,9 @@ export function LoginPage() {
         <p className="auth-switch">
           Don&apos;t have an account? <Link to="/register">Register</Link>
         </p>
+        <p className="auth-switch auth-preview-link">
+          <Link to="/admin">Admin Preview — frontend demo only</Link>
+        </p>
       </section>
       <AuthFooter />
     </main>

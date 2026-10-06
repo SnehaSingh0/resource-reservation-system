@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { AuthBrand } from "../components/AuthBrand";
+import { ProfileMenu } from "../components/ProfileMenu";
 
 type AdminIconName = "dashboard" | "reservations" | "resources" | "admins";
 
@@ -73,19 +74,15 @@ export function AdminLayout() {
             <span className="admin-navigation-icon external-link-icon" aria-hidden="true">↗</span>
             User area
           </NavLink>
-          <div className="sidebar-user">
-            <span className="profile-avatar">AD</span>
-            <span>
-              <strong>Admin Demo</strong>
-              <small>Administrator</small>
-            </span>
-          </div>
         </div>
       </aside>
       <div className="admin-main">
         <header className="admin-topbar">
           <span>Resource Reservation System</span>
-          <span className="topbar-context">Admin workspace</span>
+          <div className="admin-topbar-actions">
+            <span className="topbar-context">Admin workspace</span>
+            <ProfileMenu initials="AD" profileLabel="Administrator" />
+          </div>
         </header>
         <main className="admin-page-content">
           <Outlet />

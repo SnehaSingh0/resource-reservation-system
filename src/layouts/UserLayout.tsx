@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { AuthBrand } from "../components/AuthBrand";
+import { ProfileMenu } from "../components/ProfileMenu";
 
 export function UserLayout() {
   return (
@@ -24,16 +25,9 @@ export function UserLayout() {
             My Reservations
           </NavLink>
         </nav>
-        <button
-          className="user-profile"
-          type="button"
-          aria-label="User profile menu, initials JD"
-        >
-          <span className="user-profile-initials">JD</span>
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m4 6 4 4 4-4" />
-          </svg>
-        </button>
+        <div className="user-header-actions">
+          <ProfileMenu initials="JD" profileLabel="User account" />
+        </div>
       </header>
       <main className="user-page-content">
         <Outlet />
