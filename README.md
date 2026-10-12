@@ -2,31 +2,27 @@
 
 ## Project Overview
 
-The Resource Reservation System is a web-based application designed to manage the reservation of shared resources such as rooms, equipment, meeting spaces, or other bookable resources.
+The Resource Reservation System is a React and Django application for booking shared resources such as rooms and equipment. The React interface calls a Django REST API that owns authentication, role-based authorization, resource availability, reservation validation, and persistence. PostgreSQL is the intended application database.
 
-The application is being developed in stages, starting with the frontend interface and user/admin workflows. Backend services, database integration, authentication, and SSO can be added in the later stage.
+The frontend and backend are separate deployable applications. Authentication uses Django sessions and CSRF protection; standard registration creates user accounts, while administrator accounts are managed through protected admin functionality. SSO is not implemented.
 
----
+## Local Development
 
-## Current Stage: Frontend Demo
+### Frontend
 
-The current version is a **frontend-only demo** created to complete and review the screens, pages, navigation, reservation flow, resource availability, and admin functionality before backend development.
+1. Install the Node.js dependencies with `npm install`.
+2. Copy `.env.example` to `.env.local` and adjust `VITE_API_BASE_URL` only if the local API differs from `http://localhost:8000/api`.
+3. Start Vite with `npm run dev`; create a production build with `npm run build`.
 
-### Admin Preview
+Vite loads `.env.local` automatically. Production builds must define `VITE_API_BASE_URL` in the hosting provider's build environment; otherwise API requests fail with an explicit configuration error rather than targeting localhost.
 
-For the current frontend stage, the application uses a temporary **Admin Preview** option on the Login page.
+### Backend
 
-This is only for reviewing the Admin screens during development. It is **not real Admin authentication** and does not represent the final login mechanism.
+Install the packages listed in `backend/requirements.txt`, configure PostgreSQL connection values and `DB_PASSWORD` in the process environment, then run `python manage.py check`, `python manage.py migrate`, and `python manage.py runserver` from `backend`. The detailed Windows credential setup and production environment settings are documented in [backend/README.md](./backend/README.md). Django does not automatically load `.env` files.
 
-In the final application:
+Run backend tests with `python manage.py test` from `backend`; the configured default is PostgreSQL, and the database must be reachable with the configured role. SQLite is only an explicit isolated-test/local option and does not prove PostgreSQL behavior.
 
-* There will be one common Login page.
-* Users will log in using their credentials.
-* The backend will verify the account and its role.
-* `USER` accounts will be directed to the User area.
-* `ADMIN` accounts will be directed to the Admin area.
-* Admin accounts will be created and managed through Admin Management.
-* Authentication, authorization, database integration, and SSO can be implemented with the backend.
+Never commit passwords, database credentials, or production Django secret keys. Put deployment secrets in the host's secret/environment configuration.
 
 ---
 
@@ -107,15 +103,15 @@ The Admin side includes:
 
 The Admin interface is kept within the same application as the User interface.
 
-The current Admin Preview is only a temporary way to review these pages before backend authentication is implemented.
+Administrator routes and API operations require an authenticated account with the administrator role.
 
 ---
 
 ## Login and Role Design
 
-The planned authentication flow uses a single Login page rather than separate User and Admin login pages.
+The application uses a single Login page rather than separate User and Admin login pages.
 
-### Final planned flow
+### Authentication flow
 
 ```text
 Login
@@ -132,7 +128,7 @@ Normal registration will create User accounts.
 
 Admin accounts will be managed by authorized administrators through the Admin Management section.
 
-The current frontend does not yet contain real backend authentication or role verification.
+The backend verifies credentials and enforces role and ownership permissions.
 
 ---
 
@@ -224,31 +220,15 @@ Some additional routes redirect to the main User or Admin pages for easier navig
 
 ---
 
-## Technology Stack
+## Technology Stack and Architecture
 
-### Current Frontend
+* Frontend: React 18, TypeScript, Vite, React Router, CSS.
+* Backend: Django REST Framework with session authentication and CSRF protection.
+* Database: PostgreSQL is the intended application database and Django's default.
+* Backend configuration: environment variables; Django does not load `.env` files.
+* Deployment: frontend and backend are deployed separately and communicate over the configured API URL.
 
-* React
-* TypeScript
-* Vite
-* React Router
-* CSS
-
-### Planned Backend
-
-The backend technology and database can be finalized after the frontend workflow and requirements are reviewed.
-
-The planned architecture separates:
-
-1. Presentation Layer
-2. Application / Business Logic Layer
-3. Data Layer
-
----
-
-## Planned 3-Tier Architecture
-
-The final application is intended to follow a 3-tier architecture:
+The application follows a three-tier architecture:
 
 ```text
                 User / Browser
@@ -298,50 +278,7 @@ Responsible for storing:
 * Resource constraints
 * Reservations
 
-The exact database schema will be finalized during backend development.
-
----
-
-## Why the Application Is Being Developed in Stages
-
-The project is being developed step-by-step rather than building the complete system at once.
-
-### Stage 1 — Frontend
-
-Complete:
-
-* Screens
-* Pages
-* Navigation
-* User flow
-* Admin flow
-* Calendar interaction
-* Resource constraints
-* Reservation interface
-
-### Stage 2 — Backend
-
-Add:
-
-* APIs
-* Business logic
-* Authentication
-* Authorization
-* Reservation validation
-
-### Stage 3 — Database
-
-Add persistent storage for:
-
-* Users
-* Resources
-* Reservations
-* Constraints
-* Roles
-
-### Stage 4 — Authentication / SSO
-
-After the basic system is working, SSO and organization-level authentication can be integrated.
+The Django models and migrations define users and roles, resources, availability constraints, and reservations. Reservation validation and database concurrency handling are implemented by the backend.
 
 ---
 
@@ -355,15 +292,9 @@ They are not separate applications.
 
 ### One Login
 
-The final system will use one common Login page.
+The system uses one common Login page.
 
-The user's role will determine which area they can access.
-
-### Admin Preview
-
-The Admin Preview exists only for the current frontend review stage.
-
-It will be replaced by real role-based authentication after the backend is implemented.
+The user's role determines which area they can access, with authorization enforced by backend permissions.
 
 ### Generic Resource System
 
@@ -373,35 +304,33 @@ The application is designed as a generic resource reservation system rather than
 
 ## Deployment
 
-The frontend project is maintained in GitHub and can be deployed as a web application for review.
-
-The current deployment is intended to allow the completed frontend screens and workflows to be reviewed before backend development.
+For a deployment, set `VITE_API_BASE_URL` in the frontend hosting provider's build environment. Set `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `CSRF_TRUSTED_ORIGINS` on the backend to the deployed hosts, and provide `DJANGO_SECRET_KEY` and PostgreSQL credentials through private backend environment/secret settings. Keep the API on HTTPS. This repository does not provision infrastructure or claim a deployment is currently active.
 
 ---
 
 ## Current Project Status
 
-**Frontend:** Completed for current review stage
+**Frontend:** React/TypeScript user and administrator interface implemented
 
-**User Pages:** Completed
+**User Pages:** Implemented
 
-**Admin Pages:** Completed
+**Admin Pages:** Implemented
 
-**Calendar UI:** Completed
+**Calendar UI:** Day, Week, and Month views with existing hourly slots and range selection
 
-**Resource Constraints UI:** Completed
+**Resource Constraints UI:** Implemented
 
-**Login / Registration UI:** Completed
+**Login / Registration UI:** Connected to Django session authentication
 
-**Profile / Logout UI:** Completed
+**Profile / Logout UI:** Connected to backend session flow
 
-**Backend:** Not implemented yet
+**Backend:** Django REST API and role-based permissions implemented
 
-**Database:** Not implemented yet
+**Database:** PostgreSQL intended/default; connection must be configured per environment
 
-**Real Authentication:** Not implemented yet
+**Authentication:** Session-based login and registration implemented
 
-**SSO:** Planned for a later stage
+**SSO:** Not implemented; future work
 
 ---
 
@@ -409,4 +338,4 @@ The current deployment is intended to allow the completed frontend screens and w
 
 The goal is to develop a scalable Resource Reservation System where users can view resource availability and make reservations, while authorized administrators can manage resources, reservations, availability constraints, and administrator accounts.
 
-The system is being designed so that the frontend, backend, and database can be developed as separate layers and connected through a clear application architecture.
+The frontend, backend, and PostgreSQL database operate as separate application layers connected through the REST API.

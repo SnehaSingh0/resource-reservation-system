@@ -69,19 +69,13 @@ export function AdminLayout() {
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar-bottom">
-          <NavLink className="admin-navigation-link" to="/resources">
-            <span className="admin-navigation-icon external-link-icon" aria-hidden="true">↗</span>
-            User area
-          </NavLink>
-        </div>
       </aside>
       <div className="admin-main">
         <header className="admin-topbar">
           <span>Resource Reservation System</span>
           <div className="admin-topbar-actions">
             <span className="topbar-context">Admin workspace</span>
-            <ProfileMenu initials="AD" profileLabel="Administrator" />
+            <ProfileMenu />
           </div>
         </header>
         <main className="admin-page-content">

@@ -26,7 +26,7 @@ export function UserLayout() {
           </NavLink>
         </nav>
         <div className="user-header-actions">
-          <ProfileMenu initials="JD" profileLabel="User account" />
+          <ProfileMenu />
         </div>
       </header>
       <main className="user-page-content">

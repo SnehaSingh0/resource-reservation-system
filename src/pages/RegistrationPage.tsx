@@ -1,15 +1,42 @@
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { AuthFooter } from "../components/AuthFooter";
 import { AuthBrand } from "../components/AuthBrand";
 import { AuthField } from "../components/AuthField";
 
 export function RegistrationPage() {
   const navigate = useNavigate();
+  const { register } = useAuth();
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    navigate("/login");
+    if (isSubmitting) return;
+
+    const formData = new FormData(event.currentTarget);
+    const fullName = String(formData.get("fullName") ?? "").trim();
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "");
+    const confirmPassword = String(formData.get("confirmPassword") ?? "");
+
+    if (!fullName || !email || !password || !confirmPassword) {
+      setErrorMessage("Please complete every field before registering.");
+      return;
+    }
+
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      await register({ fullName, email, password, confirmPassword });
+      navigate("/login");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not create your account.");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -55,8 +82,13 @@ export function RegistrationPage() {
             placeholder="Confirm Password"
             type="password"
           />
-          <button className="auth-submit" type="submit">
-            Register
+          {errorMessage && (
+            <p className="auth-error" role="alert">
+              {errorMessage}
+            </p>
+          )}
+          <button className="auth-submit" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "Registering..." : "Register"}
           </button>
         </form>
 

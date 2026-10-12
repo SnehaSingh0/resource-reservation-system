@@ -1,4 +1,26 @@
+# Frontend
+
 node_modules/
 dist/
-.env
-.env.local
+
+# Environment files
+
+.env*
+!.env.example
+!.env.*.example
+
+# Python generated files
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Local databases
+
+*.sqlite3
+*.db
+
+# Python virtual environments
+
+.venv/
+venv/

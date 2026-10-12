@@ -417,6 +417,19 @@ a {
   box-shadow: 0 4px 10px rgb(39 104 72 / 16%);
 }
 
+.auth-submit:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.auth-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
 .auth-submit:focus-visible,
 .user-profile:focus-visible,
 a:focus-visible {
@@ -2429,7 +2442,7 @@ a:focus-visible {
 }
 
 .table-muted-action {
-  color: #9aa3ad;
+  color: #667386;
   font-size: 0.75rem;
 }
 
@@ -2483,3 +2496,454 @@ a:focus-visible {
     min-width: 390px;
   }
 }
+
+  .profile-menu-link {
+    display: flex;
+    min-height: 2.6rem;
+    align-items: center;
+    padding: 0.55rem 0.7rem;
+    color: #435166;
+    border-radius: 0.3rem;
+    font-size: 0.76rem;
+    text-decoration: none;
+  }
+
+  .profile-menu-link:hover,
+  .profile-menu-link:focus-visible {
+    color: #234b35;
+    background: #f1f5f2;
+  }
+
+  .profile-menu-logout:disabled {
+    cursor: wait;
+    opacity: 0.65;
+  }
+
+  .profile-page {
+    width: min(100% - 2rem, 760px);
+    margin: 2rem auto;
+  }
+
+  .profile-details {
+    padding: 1.25rem;
+  }
+
+  .profile-details dl {
+    display: grid;
+    gap: 0;
+    margin: 0;
+  }
+
+  .profile-details dl > div {
+    display: grid;
+    grid-template-columns: minmax(9rem, 0.7fr) minmax(0, 1.3fr);
+    gap: 1rem;
+    padding: 0.9rem 0;
+    border-bottom: 1px solid #edf0f4;
+  }
+
+  .profile-details dl > div:last-child {
+    border-bottom: 0;
+  }
+
+  .profile-details dt {
+    color: #5f6d7e;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .profile-details dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: #293747;
+    font-size: 0.84rem;
+  }
+
+  .table-scroll:focus-visible,
+  .calendar-grid-scroll:focus-visible,
+  .weekly-availability-table:focus-visible {
+    outline: 2px solid #315e43;
+    outline-offset: -2px;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    accent-color: #315e43;
+  }
+
+  button,
+  .button,
+  .user-navigation-link,
+  .admin-navigation-link,
+  .profile-menu-link,
+  .profile-menu-logout {
+    touch-action: manipulation;
+  }
+
+  @media (max-width: 700px) {
+    .user-site-header {
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding-inline: 0.75rem;
+    }
+
+    .user-navigation {
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      gap: 1rem;
+      scrollbar-width: thin;
+    }
+
+    .user-navigation-link {
+      min-height: 2.75rem;
+      flex: 0 0 auto;
+      font-size: 0.78rem;
+    }
+
+    .admin-sidebar {
+      padding: 0.65rem 0.75rem;
+    }
+
+    .admin-brand-link {
+      margin-bottom: 0.55rem;
+    }
+
+    .admin-navigation {
+      max-width: 100%;
+      padding-bottom: 0.2rem;
+      scrollbar-width: thin;
+    }
+
+    .admin-navigation-link {
+      min-height: 2.75rem;
+      padding-inline: 0.65rem;
+      white-space: nowrap;
+    }
+
+    .admin-topbar {
+      gap: 0.5rem;
+      padding-inline: 0.75rem;
+      font-size: 0.68rem;
+    }
+
+    .admin-topbar > span {
+      min-width: 0;
+    }
+
+    .admin-topbar-actions {
+      gap: 0.5rem;
+    }
+
+    .admin-page-content {
+      min-width: 0;
+      padding: 1rem 0.75rem 1.5rem;
+    }
+
+    .user-page-content {
+      width: calc(100% - 1.25rem);
+      margin-top: 0.9rem;
+    }
+
+    .page-heading {
+      align-items: stretch;
+      gap: 0.65rem;
+    }
+
+    .page-heading-action,
+    .page-heading-action .button {
+      width: 100%;
+    }
+
+    .page-heading h1 {
+      font-size: 1.3rem;
+    }
+
+    .page-heading p {
+      line-height: 1.45;
+    }
+
+    .panel-heading {
+      align-items: flex-start;
+      gap: 0.65rem;
+    }
+
+    .calendar-toolbar {
+      padding: 0.7rem;
+    }
+
+    .calendar-date-navigation {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .calendar-period-title {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .calendar-view-switch {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .calendar-view-switch button {
+      min-height: 2.75rem;
+    }
+
+    .calendar-grid-scroll {
+      scrollbar-width: thin;
+    }
+
+    .calendar-time-grid-week {
+      min-width: 790px;
+    }
+
+    .month-calendar {
+      padding: 0.35rem;
+    }
+
+    .month-weekday-row span {
+      font-size: 0.6rem;
+    }
+
+    .month-date-cell {
+      min-height: 3.3rem;
+    }
+
+    .date-availability {
+      overflow: hidden;
+      font-size: 0.56rem;
+      text-overflow: ellipsis;
+    }
+
+    .range-selection-tools,
+    .reservation-summary {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .range-controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .range-controls .form-control {
+      min-width: 0;
+    }
+
+    .apply-range-button {
+      min-height: 2.75rem;
+      grid-column: 1 / -1;
+    }
+
+    .summary-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .summary-actions .button {
+      min-height: 2.75rem;
+    }
+
+    .table-scroll {
+      max-width: 100%;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+
+    .table-scroll .data-table {
+      min-width: 640px;
+    }
+
+    .admin-metric-grid {
+      gap: 0.55rem;
+    }
+
+    .admin-metric-card {
+      min-height: 5.6rem;
+      padding: 0.7rem;
+    }
+
+    .admin-metric-card span {
+      font-size: 0.68rem;
+    }
+
+    .admin-quick-links .button {
+      min-height: 2.75rem;
+      flex: 1 1 100%;
+    }
+
+    .resource-form-panel {
+      padding: 0.85rem;
+    }
+
+    .weekly-availability-table {
+      max-width: calc(100vw - 3.5rem);
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+
+    .weekly-availability-table:focus-visible {
+      outline-offset: -2px;
+    }
+
+    .weekly-availability-header,
+    .weekly-availability-row {
+      min-width: 390px;
+    }
+
+    .form-actions,
+    .dialog-actions {
+      flex-wrap: wrap;
+    }
+
+    .form-actions > *,
+    .dialog-actions > * {
+      min-height: 2.75rem;
+      flex: 1 1 8rem;
+    }
+
+    .dialog-backdrop {
+      align-items: end;
+      padding: 0.6rem;
+    }
+
+    .confirm-dialog {
+      max-height: calc(100dvh - 1.2rem);
+      overflow-y: auto;
+      padding: 1rem;
+    }
+
+    .profile-menu-popover {
+      right: 0;
+      width: min(15rem, calc(100vw - 1.25rem));
+    }
+
+    .profile-menu-link,
+    .profile-menu-logout {
+      min-height: 2.75rem;
+    }
+
+    .profile-page {
+      width: calc(100% - 1.25rem);
+      margin: 1rem auto;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .user-layout-brand {
+      font-size: 0.68rem;
+    }
+
+    .user-profile-initials {
+      width: 2rem;
+      height: 2rem;
+    }
+
+    .month-date-cell {
+      min-height: 3rem;
+      padding-inline: 0.02rem;
+    }
+
+    .month-date-number {
+      width: 1.2rem;
+      height: 1.2rem;
+      font-size: 0.64rem;
+    }
+
+    .date-availability {
+      gap: 0.1rem;
+      font-size: 0.5rem;
+    }
+
+    .admin-topbar {
+      font-size: 0.62rem;
+    }
+
+    .topbar-context {
+      max-width: 4.5rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .admin-navigation-link {
+      gap: 0.45rem;
+      font-size: 0.72rem;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .auth-page {
+      justify-content: flex-start;
+      min-height: 100svh;
+      padding: max(1rem, env(safe-area-inset-top)) 0.75rem
+        max(1rem, env(safe-area-inset-bottom));
+    }
+
+    .auth-card {
+      width: min(100%, 28rem);
+      margin: auto 0;
+      padding: 1.6rem 1.1rem 1.35rem;
+    }
+
+    .auth-card h1 {
+      font-size: 1.6rem;
+    }
+  }
+
+  @media (max-width: 360px) {
+    .admin-metric-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .user-navigation {
+      gap: 0.75rem;
+    }
+
+    .user-navigation-link {
+      font-size: 0.72rem;
+    }
+
+    .range-controls,
+    .summary-actions {
+      grid-template-columns: 1fr;
+    }
+
+    .profile-details dl > div {
+      grid-template-columns: 1fr;
+      gap: 0.3rem;
+    }
+  }
+
+  @media (min-width: 701px) and (max-width: 1100px) {
+    .admin-app-shell {
+      grid-template-columns: 205px minmax(0, 1fr);
+    }
+
+    .admin-page-content {
+      padding-inline: 1.25rem;
+    }
+
+    .admin-metric-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }

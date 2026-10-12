@@ -1,15 +1,43 @@
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { AuthFooter } from "../components/AuthFooter";
 import { AuthBrand } from "../components/AuthBrand";
 import { AuthField } from "../components/AuthField";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const { login } = useAuth();
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    navigate("/dashboard");
+    if (isSubmitting) return;
+
+    const formData = new FormData(event.currentTarget);
+    const email = formData.get("email");
+    const password = formData.get("password");
+    if (typeof email !== "string" || typeof password !== "string") {
+      setErrorMessage("Enter your email address and password.");
+      return;
+    }
+
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      const user = await login(email, password);
+      navigate(user.role === "ADMIN" ? "/admin" : "/resources");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not connect to the server. Check that the backend is running and try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -38,16 +66,18 @@ export function LoginPage() {
             passwordToggle
             type="password"
           />
-          <button className="auth-submit" type="submit">
-            Login
+          {errorMessage && (
+            <p className="auth-error" role="alert">
+              {errorMessage}
+            </p>
+          )}
+          <button className="auth-submit" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "Signing in..." : "Login"}
           </button>
         </form>
 
         <p className="auth-switch">
           Don&apos;t have an account? <Link to="/register">Register</Link>
-        </p>
-        <p className="auth-switch auth-preview-link">
-          <Link to="/admin">Admin Preview — frontend demo only</Link>
         </p>
       </section>
       <AuthFooter />

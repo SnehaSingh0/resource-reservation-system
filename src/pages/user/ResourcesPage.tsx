@@ -6,17 +6,44 @@ import {
   type CSSProperties,
 } from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "../../auth/AuthContext";
 import { PageHeading } from "../../components/PageHeading";
-import {
-  demoReservations,
-  demoResources,
-  type Reservation,
-  type Resource,
-} from "../../data/demoData";
-import {
-  getSessionReservations,
-  saveSessionReservations,
-} from "../../data/demoSessionReservations";
+import { apiUrl } from "../../api/apiUrl";
+
+type Resource = {
+  id: number;
+  name: string;
+  resource_type: string;
+  description: string;
+  location: string;
+  is_active: boolean;
+  default_start_time: string;
+  default_end_time: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type AvailabilityConstraint = {
+  id: number;
+  resource: number;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  is_active: boolean;
+};
+
+type BookingPayload = {
+  id: number;
+  user: number;
+  user_email: string;
+  resource: number;
+  resource_name: string;
+  reservation_date: string;
+  start_time: string;
+  end_time: string;
+  status: "CONFIRMED" | "PENDING" | "CANCELLED";
+  notes?: string;
+};
 
 type CalendarView = "month" | "week" | "day";
 type SlotStatus = "available" | "booked" | "unavailable";
@@ -81,41 +108,77 @@ function formatHourRange(start: number, end: number) {
   return `${formatHour(start)} – ${formatHour(end)}`;
 }
 
-function getResource(resourceId: string) {
-  return demoResources.find((resource) => resource.id === resourceId) ??
-    demoResources[0];
+function getResourceById(resourceId: number | string, resources: Resource[]) {
+  return resources.find((resource) => String(resource.id) === String(resourceId)) ?? resources[0];
+}
+
+function parseTimeToMinutes(value: string | null | undefined) {
+  if (!value) return 0;
+  const [hoursText = "0", minutesText = "0"] = value.split(":");
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return 0;
+  }
+  return hours * 60 + minutes;
+}
+
+function normalizeBackendAvailabilityWindow(resource: Resource | undefined) {
+  return {
+    startTime: parseTimeToMinutes(resource?.default_start_time ?? "09:00:00"),
+    endTime: parseTimeToMinutes(resource?.default_end_time ?? "18:00:00"),
+  };
 }
 
 function getSlotStatus(
-  resource: Resource,
+  resource: Resource | undefined,
   dateKey: string,
   slotIndex: number,
-  reservations: Reservation[] = demoReservations,
+  reservations: BookingPayload[] = [],
+  constraints: AvailabilityConstraint[] = [],
 ): SlotStatus {
-  const date = fromDateKey(dateKey);
-  const availability = resource.weeklyAvailability[date.getDay()];
-  const slotStart = `${String(FIRST_HOUR + slotIndex).padStart(2, "0")}:00`;
-  const slotEnd = `${String(FIRST_HOUR + slotIndex + 1).padStart(2, "0")}:00`;
+  if (!resource) return "unavailable";
+
+  const availability = normalizeBackendAvailabilityWindow(resource);
+  const slotStartMinutes = (FIRST_HOUR + slotIndex) * 60;
+  const slotEndMinutes = slotStartMinutes + 60;
 
   if (
-    resource.status !== "Active" ||
-    !availability ||
-    slotStart < availability.startTime ||
-    slotEnd > availability.endTime
+    !resource.is_active ||
+    slotStartMinutes < availability.startTime ||
+    slotEndMinutes > availability.endTime
   ) {
     return "unavailable";
   }
 
+  if (constraints.length > 0) {
+    const backendWeekday = (fromDateKey(dateKey).getDay() + 6) % 7;
+    const dayWindows = constraints.filter(
+      (constraint) =>
+        constraint.day_of_week === backendWeekday && constraint.is_active,
+    );
+    const insideConfiguredWindow = dayWindows.some(
+      (constraint) =>
+        slotStartMinutes >= parseTimeToMinutes(constraint.start_time) &&
+        slotEndMinutes <= parseTimeToMinutes(constraint.end_time),
+    );
+    if (!insideConfiguredWindow) return "unavailable";
+  }
+
   const hasBooking = reservations.some((reservation) => {
     if (
-      reservation.status === "Cancelled" ||
-      reservation.resource !== resource.name ||
-      reservation.date !== dateKey
+      reservation.status === "CANCELLED" ||
+      reservation.resource !== resource.id ||
+      reservation.reservation_date !== dateKey
     ) {
       return false;
     }
+
+    const reservationStartMinutes = parseTimeToMinutes(reservation.start_time);
+    const reservationEndMinutes = parseTimeToMinutes(reservation.end_time);
     return (
-      reservation.startTime < slotEnd && reservation.endTime > slotStart
+      reservationStartMinutes < slotEndMinutes &&
+      reservationEndMinutes > slotStartMinutes
     );
   });
 
@@ -123,16 +186,21 @@ function getSlotStatus(
 }
 
 function validateRange(
-  resource: Resource,
+  resource: Resource | undefined,
   range: TimeRange,
-  reservations: Reservation[] = demoReservations,
+  reservations: BookingPayload[] = [],
+  constraints: AvailabilityConstraint[] = [],
 ) {
+  if (!resource) {
+    return "Select a valid resource before choosing a time range.";
+  }
+
   if (range.end <= range.start) {
     return "Choose an end time after the start time.";
   }
 
   for (let slot = range.start; slot < range.end; slot += 1) {
-    const status = getSlotStatus(resource, range.date, slot, reservations);
+    const status = getSlotStatus(resource, range.date, slot, reservations, constraints);
     if (status === "booked") {
       return `${formatHour(FIRST_HOUR + slot)} is already booked for ${resource.name}. Choose a continuous available range.`;
     }
@@ -145,12 +213,17 @@ function validateRange(
 }
 
 function getDateAvailability(
-  resource: Resource,
+  resource: Resource | undefined,
   dateKey: string,
-  reservations: Reservation[],
+  reservations: BookingPayload[],
+  constraints: AvailabilityConstraint[],
 ): DateAvailability {
+  if (!resource) {
+    return "unavailable";
+  }
+
   const statuses = SLOT_STARTS.map((slot) =>
-    getSlotStatus(resource, dateKey, slot - FIRST_HOUR, reservations),
+    getSlotStatus(resource, dateKey, slot - FIRST_HOUR, reservations, constraints),
   );
   const availableCount = statuses.filter(
     (status) => status === "available",
@@ -182,10 +255,25 @@ function getMonthDates(selectedDate: Date) {
   );
 }
 
+function getCsrfToken() {
+  const csrfCookie = document.cookie
+    .split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith("csrftoken="));
+
+  return csrfCookie
+    ? decodeURIComponent(csrfCookie.slice("csrftoken=".length))
+    : null;
+}
+
 export function ResourcesPage() {
-  const [resourceId, setResourceId] = useState(demoResources[0].id);
-  const [sessionReservations, setSessionReservations] =
-    useState(getSessionReservations);
+  const { user } = useAuth();
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [reservations, setReservations] = useState<BookingPayload[]>([]);
+  const [constraintsByResource, setConstraintsByResource] = useState<
+    Record<number, AvailabilityConstraint[]>
+  >({});
+  const [resourceId, setResourceId] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState(() =>
     toDateKey(new Date()),
   );
@@ -197,16 +285,14 @@ export function ResourcesPage() {
   const [notice, setNotice] = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
+  const [isLoading, setLoading] = useState(true);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [availabilityRevision, setAvailabilityRevision] = useState(0);
+  const [loadError, setError] = useState("");
   const dragRef = useRef<DragRange | null>(null);
   const ignoreClickRef = useRef(false);
 
-  const resource = getResource(resourceId);
-  const reservations = useMemo(
-    () => [...demoReservations, ...sessionReservations],
-    [sessionReservations],
-  );
-  const reservationsRef = useRef(reservations);
-  reservationsRef.current = reservations;
+  const resource = resourceId ? getResourceById(resourceId, resources) : undefined;
   const selectedDateObject = fromDateKey(selectedDate);
   const monthDates = useMemo(
     () => getMonthDates(selectedDateObject),
@@ -216,8 +302,163 @@ export function ResourcesPage() {
     () => getWeekDates(selectedDateObject),
     [selectedDate],
   );
+  const availabilityDates =
+    view === "month"
+      ? [monthDates[0], monthDates[monthDates.length - 1]]
+      : view === "week"
+        ? [weekDates[0], weekDates[weekDates.length - 1]]
+        : [selectedDate, selectedDate];
   const visibleDates =
     view === "day" ? [selectedDate] : view === "week" ? weekDates : [selectedDate];
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+
+    async function loadResources() {
+      setLoading(true);
+      setError("");
+      try {
+        const response = await fetch(apiUrl("/resources/"), {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error("Could not load resources from the server.");
+        }
+
+        const payload = (await response.json()) as Resource[];
+        const activeResources = (Array.isArray(payload) ? payload : []).filter(
+          (item) => item.is_active,
+        );
+        if (!active) return;
+        setResources(activeResources);
+        setResourceId((currentId) =>
+          activeResources.some((item) => String(item.id) === currentId)
+            ? currentId
+            : String(activeResources[0]?.id ?? ""),
+        );
+      } catch (resourceError) {
+        if (!active) return;
+        setError(
+          resourceError instanceof Error
+            ? resourceError.message
+            : "Could not load resource information from the server.",
+        );
+        setResources([]);
+        setReservations([]);
+        setConstraintsByResource({});
+        setResourceId("");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadResources();
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user || !resource) {
+      setReservations([]);
+      setAvailabilityLoading(false);
+      return;
+    }
+
+    const selectedResource = resource;
+    let active = true;
+    const [startDate, endDate] = availabilityDates;
+    const dateQuery = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+    });
+
+    async function loadSelectedResourceAvailability() {
+      setAvailabilityLoading(true);
+      setError("");
+
+      try {
+        const [constraintsResponse, availabilityResponse] = await Promise.all([
+          fetch(apiUrl(`/resources/${selectedResource.id}/constraints/`), {
+            credentials: "include",
+          }),
+          fetch(
+            apiUrl(
+              `/resources/${selectedResource.id}/availability/?${dateQuery.toString()}`,
+            ),
+            { credentials: "include" },
+          ),
+        ]);
+
+        if (!constraintsResponse.ok) {
+          throw new Error(
+            `Could not load availability rules for ${selectedResource.name}.`,
+          );
+        }
+        if (!availabilityResponse.ok) {
+          throw new Error(`Could not load reservations for ${selectedResource.name}.`);
+        }
+
+        const [constraints, availability] = await Promise.all([
+          constraintsResponse.json() as Promise<AvailabilityConstraint[]>,
+          availabilityResponse.json() as Promise<{
+            bookings: Array<{
+              date: string;
+              start_time: string;
+              end_time: string;
+              status: "CONFIRMED" | "PENDING" | "CANCELLED";
+            }>;
+          }>,
+        ]);
+        if (!active) return;
+
+        setConstraintsByResource((current) => ({
+          ...current,
+          [selectedResource.id]: constraints,
+        }));
+        setReservations(
+          availability.bookings.map((booking) => ({
+            id: 0,
+            user: 0,
+            user_email: "",
+            resource: selectedResource.id,
+            resource_name: selectedResource.name,
+            reservation_date: booking.date,
+            start_time: booking.start_time,
+            end_time: booking.end_time,
+            status: booking.status,
+          })),
+        );
+      } catch (availabilityError) {
+        if (!active) return;
+        setError(
+          availabilityError instanceof Error
+            ? availabilityError.message
+            : `Could not load availability for ${selectedResource.name}.`,
+        );
+        setReservations([]);
+        setConstraintsByResource((current) => ({
+          ...current,
+          [selectedResource.id]: [],
+        }));
+      } finally {
+        if (active) setAvailabilityLoading(false);
+      }
+    }
+
+    void loadSelectedResourceAvailability();
+    return () => {
+      active = false;
+    };
+  }, [
+    user?.id,
+    resource?.id,
+    resource?.name,
+    availabilityDates[0],
+    availabilityDates[1],
+    availabilityRevision,
+  ]);
 
   function clearSelection() {
     setSelectedRange(null);
@@ -235,7 +476,7 @@ export function ResourcesPage() {
 
   function finishDrag() {
     const drag = dragRef.current;
-    if (!drag) return;
+    if (!drag || !resource) return;
     dragRef.current = null;
     ignoreClickRef.current = true;
 
@@ -251,11 +492,7 @@ export function ResourcesPage() {
     setDraftRange(null);
     setSelectedRange(range);
     setSelectionError(
-      validateRange(
-        getResource(drag.resourceId),
-        range,
-        reservationsRef.current,
-      ),
+      validateRange(resource, range, reservations, constraintsByResource[resource.id] ?? []),
     );
     setStartTime(`${String(FIRST_HOUR + range.start).padStart(2, "0")}:00`);
     setEndTime(`${String(FIRST_HOUR + range.end).padStart(2, "0")}:00`);
@@ -269,7 +506,7 @@ export function ResourcesPage() {
       window.removeEventListener("pointerup", finishDrag);
       window.removeEventListener("pointercancel", finishDrag);
     };
-  }, []);
+  }, [resource, reservations]);
 
   function navigateCalendar(direction: -1 | 1) {
     const date = fromDateKey(selectedDate);
@@ -297,7 +534,14 @@ export function ResourcesPage() {
   }
 
   function getCellStatus(date: string, slotIndex: number): SlotStatus {
-    return getSlotStatus(resource, date, slotIndex, reservations);
+    if (!resource) return "unavailable";
+    return getSlotStatus(
+      resource,
+      date,
+      slotIndex,
+      reservations,
+      constraintsByResource[resource.id] ?? [],
+    );
   }
 
   function isInRange(date: string, slotIndex: number) {
@@ -312,6 +556,7 @@ export function ResourcesPage() {
   }
 
   function selectRangeFromControls() {
+    if (!resource) return;
     const start = Number(startTime.slice(0, 2)) - FIRST_HOUR;
     const end = Number(endTime.slice(0, 2)) - FIRST_HOUR;
     const range: TimeRange = {
@@ -322,41 +567,82 @@ export function ResourcesPage() {
     };
     setSelectedRange(range);
     setDraftRange(null);
-    setSelectionError(validateRange(resource, range, reservations));
+    setSelectionError(
+      validateRange(resource, range, reservations, constraintsByResource[resource.id] ?? []),
+    );
     setSelectionHint("");
     setNotice("");
   }
 
-  function reserveSelectedRange() {
-    if (!selectedRange || selectionError) return;
-    const reservation: Reservation = {
-      id: `DEMO-${Date.now()}`,
-      user: "Jordan Davis",
-      resource: resource.name,
-      date: selectedRange.date,
-      startTime: `${String(FIRST_HOUR + selectedRange.start).padStart(2, "0")}:00`,
-      endTime: `${String(FIRST_HOUR + selectedRange.end).padStart(2, "0")}:00`,
-      status: "Confirmed",
-    };
-    const updatedReservations = [...sessionReservations, reservation];
-    saveSessionReservations(updatedReservations);
-    setSessionReservations(updatedReservations);
-    setNotice(
-      `${resource.name} selected for ${formatDate(selectedRange.date, {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })}, ${formatHourRange(
-        FIRST_HOUR + selectedRange.start,
-        FIRST_HOUR + selectedRange.end,
-      )}. This is a frontend-only preview.`,
-    );
-    setSelectedRange(null);
-    setDraftRange(null);
-    setSelectionError("");
+  async function reserveSelectedRange() {
+    if (!selectedRange || selectionError || !resource) return;
+
+    const csrfToken = getCsrfToken();
+    if (!csrfToken) {
+      setSelectionError("The session security token is unavailable. Please refresh the page and try again.");
+      return;
+    }
+
+    try {
+      const response = await fetch(apiUrl("/reservations/"), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({
+          resource: Number(resource.id),
+          reservation_date: selectedRange.date,
+          start_time: `${String(FIRST_HOUR + selectedRange.start).padStart(2, "0")}:00`,
+          end_time: `${String(FIRST_HOUR + selectedRange.end).padStart(2, "0")}:00`,
+          notes: "Created from the resources calendar.",
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        detail?: string;
+        non_field_errors?: string[];
+        end_time?: string[];
+        resource?: string[];
+        status?: BookingPayload["status"];
+      };
+
+      if (!response.ok) {
+        const backendMessage =
+          payload.detail ||
+          payload.non_field_errors?.[0] ||
+          payload.end_time?.[0] ||
+          payload.resource?.[0] ||
+          "The reservation could not be created.";
+        throw new Error(backendMessage);
+      }
+
+      setAvailabilityRevision((current) => current + 1);
+      setNotice(
+        `${resource.name} is reserved for ${formatDate(selectedRange.date, {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        })}, ${formatHourRange(
+          FIRST_HOUR + selectedRange.start,
+          FIRST_HOUR + selectedRange.end,
+        )} (${payload.status?.toLowerCase() ?? "confirmed"}).`,
+      );
+      setSelectedRange(null);
+      setDraftRange(null);
+      setSelectionError("");
+    } catch (bookingError) {
+      const message =
+        bookingError instanceof Error
+          ? bookingError.message
+          : "The reservation could not be created.";
+      setSelectionError(message);
+    }
   }
 
   function startDrag(date: string, slotIndex: number) {
+    if (!resource) return;
     ignoreClickRef.current = true;
     setNotice("");
     setSelectionError("");
@@ -392,7 +678,7 @@ export function ResourcesPage() {
 
   function updateDrag(date: string, slotIndex: number) {
     const drag = dragRef.current;
-    if (!drag) return;
+    if (!drag || !resource) return;
     if (date !== drag.date) {
       setSelectionHint("A reservation range must stay within one date.");
       return;
@@ -461,6 +747,7 @@ export function ResourcesPage() {
   }
 
   function handleSlotClick(date: string, slotIndex: number, detail: number) {
+    if (!resource) return;
     if (detail > 0 && ignoreClickRef.current) {
       ignoreClickRef.current = false;
       return;
@@ -493,7 +780,12 @@ export function ResourcesPage() {
 
   function renderTimeGrid(dates: string[]) {
     return (
-      <div className="calendar-grid-scroll">
+      <div
+        className="calendar-grid-scroll"
+        role="region"
+        aria-label={dates.length === 1 ? "Day calendar time slots" : "Week calendar time slots"}
+        tabIndex={0}
+      >
         <div
           className={`calendar-time-grid ${dates.length === 1 ? "calendar-time-grid-day" : "calendar-time-grid-week"}`}
           style={{ "--calendar-day-count": dates.length } as CSSProperties}
@@ -577,7 +869,12 @@ export function ResourcesPage() {
 
   const rangeForSummary = draftRange ?? selectedRange;
   const rangeValidation = rangeForSummary
-    ? validateRange(resource, rangeForSummary)
+    ? validateRange(
+        resource,
+        rangeForSummary,
+        reservations,
+        resource ? constraintsByResource[resource.id] ?? [] : [],
+      )
     : selectionError;
   const weekStart = weekDates[0];
   const weekEnd = weekDates[6];
@@ -594,20 +891,25 @@ export function ResourcesPage() {
       />
 
       <section className="panel calendar-panel">
+        {loadError && (
+          <div className="inline-notice inline-notice-error" role="alert">
+            {loadError}
+          </div>
+        )}
+
         <div className="calendar-toolbar">
           <label className="form-control calendar-resource-select">
             <span>Resource</span>
             <select
               value={resourceId}
               onChange={(event) => changeResource(event.target.value)}
+              disabled={resources.length === 0}
             >
-              {demoResources
-                .filter((item) => item.status === "Active")
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} · {item.type}
-                  </option>
-                ))}
+              {resources.map((item) => (
+                <option key={item.id} value={String(item.id)}>
+                  {item.name} · {item.resource_type}
+                </option>
+              ))}
             </select>
           </label>
 
@@ -669,7 +971,17 @@ export function ResourcesPage() {
           </div>
         </div>
 
-        {view === "month" ? (
+        {isLoading || availabilityLoading ? (
+          <div className="inline-notice" role="status">
+            {isLoading
+              ? "Loading resources…"
+              : `Loading availability for ${resource?.name ?? "the selected resource"}…`}
+          </div>
+        ) : resources.length === 0 ? (
+          <div className="inline-notice inline-notice-error" role="alert">
+            No active resources are currently available.
+          </div>
+        ) : view === "month" ? (
           <div className="month-calendar" aria-label={`${monthTitle} availability`}>
             <div className="month-weekday-row">
               {WEEKDAYS.map((day) => (
@@ -685,10 +997,11 @@ export function ResourcesPage() {
                   resource,
                   date,
                   reservations,
+                  resource ? constraintsByResource[resource.id] ?? [] : [],
                 );
                 return (
                   <button
-                    aria-label={`${formatDate(date, { weekday: "long", month: "long", day: "numeric" })}: ${availability} availability for ${resource.name}`}
+                    aria-label={`${formatDate(date, { weekday: "long", month: "long", day: "numeric" })}: ${availability} availability for ${resource?.name ?? "resource"}`}
                     aria-pressed={date === selectedDate}
                     className={[
                       "month-date-cell",
@@ -737,9 +1050,9 @@ export function ResourcesPage() {
       <section className="panel selected-day-panel">
         <div className="selected-day-heading">
           <div>
-            <h2>{resource.name} schedule</h2>
+            <h2>{resource?.name ?? "Resource"} schedule</h2>
             <p>
-              {resource.location} ·{" "}
+              {resource?.location ?? "Location unavailable"} ·{" "}
               {formatDate(selectedDate, {
                 weekday: "long",
                 month: "long",
@@ -748,7 +1061,7 @@ export function ResourcesPage() {
               })}
             </p>
           </div>
-          <span className="resource-type-pill">{resource.type}</span>
+          <span className="resource-type-pill">{resource?.resource_type ?? "Resource"}</span>
         </div>
         {view === "month" && renderTimeGrid([selectedDate])}
         <div className="range-selection-tools">
@@ -816,7 +1129,7 @@ export function ResourcesPage() {
               <dl className="reservation-summary-fields">
                 <div>
                   <dt>Resource</dt>
-                  <dd>{resource.name}</dd>
+                  <dd>{resource?.name ?? "Resource"}</dd>
                 </div>
                 <div>
                   <dt>Date</dt>
