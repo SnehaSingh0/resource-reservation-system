@@ -57,8 +57,15 @@ async function ensureCsrfCookie() {
     throw new Error("Could not prepare secure authentication. Please try again.");
   }
 
-  const token = getCsrfToken();
-  if (!token) {
+  const body: unknown = await response.json().catch(() => null);
+  const token =
+    typeof body === "object" &&
+    body !== null &&
+    "csrfToken" in body &&
+    typeof body.csrfToken === "string"
+      ? body.csrfToken
+      : null;
+  if (token === null) {
     throw new Error("Could not read the security token. Please try again.");
   }
 

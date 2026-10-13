@@ -19,6 +19,8 @@ This backend implements the Tier 2 application layer for the existing frontend d
 - `GET /api/users/me/`
 - `GET /api/users/`
 
+The CSRF endpoint returns a masked `csrfToken` in its JSON response and sets the CSRF cookie. Cross-origin frontends should send that token in the `X-CSRFToken` header and include credentials so the browser sends the backend's CSRF and session cookies.
+
 ### Resources
 
 - `GET /api/resources/`

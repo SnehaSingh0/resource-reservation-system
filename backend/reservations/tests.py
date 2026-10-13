@@ -128,7 +128,9 @@ class ReservationBusinessRulesTests(TestCase):
     def get_csrf_token(self):
         response = self.client.get("/api/auth/csrf/")
         self.assertEqual(response.status_code, 200)
-        return self.client.cookies["csrftoken"].value
+        self.assertIn("csrfToken", response.data)
+        self.assertTrue(response.cookies.get("csrftoken"))
+        return response.data["csrfToken"]
 
     def login_user(self, password="secretpass123"):
         csrf_token = self.get_csrf_token()
