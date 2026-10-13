@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import traceback
+
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import validate_email
@@ -28,6 +31,7 @@ from .services import cancel_reservation, create_or_update_reservation
 from .throttles import LoginIPRateThrottle, LoginRateThrottle
 
 UserModel = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class RegisterUserView(APIView):
@@ -102,14 +106,29 @@ class LoginView(APIView):
         password = request.data.get("password")
         if not isinstance(email, str) or not isinstance(password, str):
             return Response({"detail": "Email and password are required."}, status=400)
-        user = authenticate(request, email=email, password=password)
-        if user is None:
+        try:
+            user = authenticate(request, email=email, password=password)
+            if user is None:
+                return Response(
+                    {"detail": "Invalid credentials."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            login(request, user)
             return Response(
-                {"detail": "Invalid credentials."},
-                status=status.HTTP_401_UNAUTHORIZED,
+                {"detail": "Login successful.", "user": UserSerializer(user).data}
             )
-        login(request, user)
-        return Response({"detail": "Login successful.", "user": UserSerializer(user).data})
+        except Exception as exc:
+            frames = traceback.extract_tb(exc.__traceback__)
+            frame_details = " <- ".join(
+                f"{frame.filename}:{frame.lineno} in {frame.name}"
+                for frame in frames
+            )
+            logger.error(
+                "Login processing failed; exception_class=%s; traceback=%s",
+                type(exc).__name__,
+                frame_details,
+            )
+            raise
 
 
 class LogoutView(APIView):

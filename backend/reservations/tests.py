@@ -185,6 +185,28 @@ class ReservationBusinessRulesTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_unexpected_login_exception_logs_only_class_and_traceback(self):
+        csrf_token = self.get_csrf_token()
+        password = "private-password-sentinel"
+        with self.assertLogs("reservations.views", level="ERROR") as captured:
+            with self.assertRaisesRegex(RuntimeError, "private-exception-sentinel"):
+                with patch(
+                    "reservations.views.authenticate",
+                    side_effect=RuntimeError("private-exception-sentinel"),
+                ):
+                    self.client.post(
+                        "/api/auth/login/",
+                        {"email": self.user.email, "password": password},
+                        format="json",
+                        HTTP_X_CSRFTOKEN=csrf_token,
+                    )
+
+        log_output = "\n".join(captured.output)
+        self.assertIn("exception_class=RuntimeError", log_output)
+        self.assertIn("in post", log_output)
+        self.assertNotIn("private-exception-sentinel", log_output)
+        self.assertNotIn(password, log_output)
+
     def test_authenticated_unsafe_reservation_requests_require_csrf(self):
         login_response = self.login_user()
         self.assertEqual(login_response.status_code, 200)

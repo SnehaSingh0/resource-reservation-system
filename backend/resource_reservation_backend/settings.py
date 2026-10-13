@@ -177,6 +177,30 @@ REST_FRAMEWORK = {
     },
 }
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "safe": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "login_diagnostics": {
+            "class": "logging.StreamHandler",
+            "formatter": "safe",
+        },
+    },
+    "loggers": {
+        "reservations.views": {
+            "handlers": ["login_diagnostics"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+    },
+}
+
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
