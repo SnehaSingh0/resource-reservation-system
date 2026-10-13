@@ -3,10 +3,12 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
 from threading import Barrier
+from types import SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.db import ProgrammingError
 from django.core.management import call_command
 from django.db import close_old_connections, connection
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -206,6 +208,59 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertIn("in post", log_output)
         self.assertNotIn("private-exception-sentinel", log_output)
         self.assertNotIn(password, log_output)
+
+    def test_programming_error_logs_only_safe_postgres_diagnostics(self):
+        csrf_token = self.get_csrf_token()
+        password = "private-password-sentinel"
+        driver_error = RuntimeError("private-driver-error-sentinel")
+        driver_error.sqlstate = "42P01"
+        driver_error.diag = SimpleNamespace(
+            table_name="",
+            column_name="",
+            message_primary='relation "reservations_user" does not exist',
+        )
+        database_error = ProgrammingError("private-database-error-sentinel")
+        database_error.__cause__ = driver_error
+
+        with self.assertLogs("reservations.views", level="ERROR") as captured:
+            with self.assertRaises(ProgrammingError):
+                with patch(
+                    "reservations.views.authenticate",
+                    side_effect=database_error,
+                ):
+                    self.client.post(
+                        "/api/auth/login/",
+                        {"email": self.user.email, "password": password},
+                        format="json",
+                        HTTP_X_CSRFTOKEN=csrf_token,
+                    )
+
+        log_output = "\n".join(captured.output)
+        self.assertIn("exception_class=ProgrammingError", log_output)
+        self.assertIn("db_sqlstate=42P01", log_output)
+        self.assertIn("db_table=reservations_user", log_output)
+        self.assertIn("db_column=-", log_output)
+        self.assertNotIn("private-database-error-sentinel", log_output)
+        self.assertNotIn("private-driver-error-sentinel", log_output)
+        self.assertNotIn(password, log_output)
+
+    def test_safe_database_error_details_identify_missing_column(self):
+        from .views import _safe_database_error_details
+
+        database_error = RuntimeError("private-error-sentinel")
+        database_error.sqlstate = "42703"
+        database_error.diag = SimpleNamespace(
+            table_name="",
+            column_name="",
+            message_primary='column "reservations_user.created_at" does not exist',
+        )
+
+        details = _safe_database_error_details(database_error)
+
+        self.assertEqual(details["sqlstate"], "42703")
+        self.assertEqual(details["column"], "reservations_user.created_at")
+        self.assertIsNone(details["table"])
+        self.assertNotIn("private-error-sentinel", str(details))
 
     def test_authenticated_unsafe_reservation_requests_require_csrf(self):
         login_response = self.login_user()

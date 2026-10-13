@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import traceback
 
 from django.contrib.auth import authenticate, get_user_model, login, logout
@@ -32,6 +33,39 @@ from .throttles import LoginIPRateThrottle, LoginRateThrottle
 
 UserModel = get_user_model()
 logger = logging.getLogger(__name__)
+
+_MISSING_TABLE = re.compile(r'relation "([^"]+)" does not exist')
+_MISSING_COLUMN = re.compile(r'column "([^"]+)" does not exist')
+
+
+def _safe_database_error_details(exception):
+    details = {"sqlstate": None, "table": None, "column": None}
+    current = exception
+    visited = set()
+
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        sqlstate = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        diagnostics = getattr(current, "diag", None)
+
+        if sqlstate and not details["sqlstate"]:
+            details["sqlstate"] = sqlstate
+        if diagnostics:
+            details["table"] = details["table"] or getattr(diagnostics, "table_name", None) or None
+            details["column"] = details["column"] or getattr(diagnostics, "column_name", None) or None
+            primary_message = getattr(diagnostics, "message_primary", "") or ""
+            if sqlstate == "42P01" and not details["table"]:
+                match = _MISSING_TABLE.search(primary_message)
+                if match:
+                    details["table"] = match.group(1)
+            elif sqlstate == "42703" and not details["column"]:
+                match = _MISSING_COLUMN.search(primary_message)
+                if match:
+                    details["column"] = match.group(1)
+
+        current = current.__cause__ or current.__context__
+
+    return details
 
 
 class RegisterUserView(APIView):
@@ -123,10 +157,15 @@ class LoginView(APIView):
                 f"{frame.filename}:{frame.lineno} in {frame.name}"
                 for frame in frames
             )
+            database_details = _safe_database_error_details(exc)
             logger.error(
-                "Login processing failed; exception_class=%s; traceback=%s",
+                "Login processing failed; exception_class=%s; traceback=%s; "
+                "db_sqlstate=%s; db_table=%s; db_column=%s",
                 type(exc).__name__,
                 frame_details,
+                database_details["sqlstate"] or "-",
+                database_details["table"] or "-",
+                database_details["column"] or "-",
             )
             raise
 
