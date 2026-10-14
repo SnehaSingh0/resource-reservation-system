@@ -132,15 +132,17 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
     constraints: Constraint[],
     values: Record<number, AvailabilityRow>,
   ) {
-    for (const constraint of constraints) {
-      await adminApi<Constraint>(
+    await Promise.all(
+      constraints.map((constraint) =>
+        adminApi<Constraint>(
         `/resource-constraints/${constraint.id}/`,
         { method: "PUT", body: JSON.stringify({ is_active: false }) },
         "Could not update existing availability.",
-      );
-    }
+        ),
+      ),
+    );
 
-    for (const { day } of weekdays) {
+    await Promise.all(weekdays.map(async ({ day }) => {
       const backendDay = toBackendWeekday(day);
       const value = values[day];
       const body = {
@@ -163,7 +165,7 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
           `Could not save ${weekdays.find((item) => item.day === day)?.label ?? "weekday"} availability.`,
         );
       }
-    }
+    }));
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

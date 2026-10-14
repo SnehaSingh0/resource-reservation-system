@@ -354,6 +354,38 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertEqual(reservation.resource, self.resource)
         self.assertEqual(reservation.status, Reservation.STATUS_CONFIRMED)
 
+    def test_created_reservation_is_persisted_and_visible_only_to_its_owner(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "start_time": "14:00",
+                "end_time": "16:00",
+                "notes": "Read-back check",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        reservation = Reservation.objects.get(pk=response.data["id"])
+        self.assertEqual(reservation.user, self.user)
+        self.assertEqual(reservation.resource, self.resource)
+
+        owner_list = self.client.get("/api/reservations/")
+        self.assertEqual([item["id"] for item in owner_list.data], [reservation.id])
+
+        other_user = User.objects.create_user(
+            username="reservation-reader",
+            email="reservation-reader@example.com",
+            password="local-audit-test-password",
+            role=User.ROLE_USER,
+        )
+        self.client.force_authenticate(user=other_user)
+        other_user_list = self.client.get("/api/reservations/")
+        self.assertEqual(other_user_list.data, [])
+
     def test_user_cannot_view_another_users_reservation_detail(self):
         other_user = User.objects.create_user(
             username="user2",

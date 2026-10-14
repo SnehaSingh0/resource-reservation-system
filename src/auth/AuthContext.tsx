@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../api/apiUrl";
+import { requireCsrfToken } from "../api/csrf";
 
 export type AuthUser = {
   id: number;
@@ -36,41 +37,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-
-function getCsrfToken() {
-  const csrfCookie = document.cookie
-    .split(";")
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith("csrftoken="));
-
-  return csrfCookie
-    ? decodeURIComponent(csrfCookie.slice("csrftoken=".length))
-    : null;
-}
-
-async function ensureCsrfCookie() {
-  const response = await fetch(apiUrl("/auth/csrf/"), {
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error("Could not prepare secure authentication. Please try again.");
-  }
-
-  const body: unknown = await response.json().catch(() => null);
-  const token =
-    typeof body === "object" &&
-    body !== null &&
-    "csrfToken" in body &&
-    typeof body.csrfToken === "string"
-      ? body.csrfToken
-      : null;
-  if (token === null) {
-    throw new Error("Could not read the security token. Please try again.");
-  }
-
-  return token;
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -108,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const csrfToken = await ensureCsrfCookie();
+    const csrfToken = await requireCsrfToken();
 
     const response = await fetch(apiUrl("/auth/login/"), {
       method: "POST",
@@ -152,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error("Passwords do not match.");
       }
 
-      const csrfToken = await ensureCsrfCookie();
+      const csrfToken = await requireCsrfToken();
       const nameParts = fullName.trim().split(/\s+/);
       const firstName = nameParts[0] ?? "";
       const lastName = nameParts.slice(1).join(" ");
@@ -187,19 +153,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    const csrfToken = getCsrfToken();
-
     try {
-      if (csrfToken) {
-        await fetch(apiUrl("/auth/logout/"), {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken,
-          },
-        });
-      }
+      const csrfToken = await requireCsrfToken();
+      await fetch(apiUrl("/auth/logout/"), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+      });
     } catch {
       // Continue to end the local session even if the backend request fails.
     } finally {

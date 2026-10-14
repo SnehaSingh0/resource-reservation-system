@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { PageHeading } from "../../components/PageHeading";
 import { apiUrl } from "../../api/apiUrl";
+import { requireCsrfToken } from "../../api/csrf";
 
 type Resource = {
   id: number;
@@ -255,17 +256,6 @@ function getMonthDates(selectedDate: Date) {
   );
 }
 
-function getCsrfToken() {
-  const csrfCookie = document.cookie
-    .split(";")
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith("csrftoken="));
-
-  return csrfCookie
-    ? decodeURIComponent(csrfCookie.slice("csrftoken=".length))
-    : null;
-}
-
 export function ResourcesPage() {
   const { user } = useAuth();
   const [resources, setResources] = useState<Resource[]>([]);
@@ -283,6 +273,7 @@ export function ResourcesPage() {
   const [selectionError, setSelectionError] = useState("");
   const [selectionHint, setSelectionHint] = useState("");
   const [notice, setNotice] = useState("");
+  const [isReserving, setIsReserving] = useState(false);
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [isLoading, setLoading] = useState(true);
@@ -484,10 +475,7 @@ export function ResourcesPage() {
       date: drag.date,
       resourceId: drag.resourceId,
       start: Math.min(drag.start, drag.current),
-      end:
-        drag.current === drag.start
-          ? drag.start + 1
-          : Math.max(drag.start, drag.current),
+      end: Math.max(drag.start, drag.current) + 1,
     };
     setDraftRange(null);
     setSelectedRange(range);
@@ -575,15 +563,11 @@ export function ResourcesPage() {
   }
 
   async function reserveSelectedRange() {
-    if (!selectedRange || selectionError || !resource) return;
+    if (!selectedRange || selectionError || !resource || isReserving) return;
 
-    const csrfToken = getCsrfToken();
-    if (!csrfToken) {
-      setSelectionError("The session security token is unavailable. Please refresh the page and try again.");
-      return;
-    }
-
+    setIsReserving(true);
     try {
+      const csrfToken = await requireCsrfToken();
       const response = await fetch(apiUrl("/reservations/"), {
         method: "POST",
         credentials: "include",
@@ -638,6 +622,8 @@ export function ResourcesPage() {
           ? bookingError.message
           : "The reservation could not be created.";
       setSelectionError(message);
+    } finally {
+      setIsReserving(false);
     }
   }
 
@@ -692,7 +678,7 @@ export function ResourcesPage() {
     if (direction > 0) {
       for (
         let candidate = drag.start + direction;
-        candidate < slotIndex;
+        candidate <= slotIndex;
         candidate += 1
       ) {
         const status = getCellStatus(date, candidate);
@@ -703,7 +689,6 @@ export function ResourcesPage() {
         }
         acceptedCurrent = candidate;
       }
-      if (!blockedStatus) acceptedCurrent = slotIndex;
     } else if (direction < 0) {
       for (
         let candidate = drag.start - 1;
@@ -723,10 +708,7 @@ export function ResourcesPage() {
 
     drag.current = acceptedCurrent;
     const rangeStart = Math.min(drag.start, acceptedCurrent);
-    const rangeEnd =
-      rangeStart === Math.max(drag.start, acceptedCurrent)
-        ? drag.start + 1
-        : Math.max(drag.start, acceptedCurrent);
+    const rangeEnd = Math.max(drag.start, acceptedCurrent) + 1;
     const range: TimeRange = {
       resourceId: drag.resourceId,
       date: drag.date,
@@ -1177,10 +1159,10 @@ export function ResourcesPage() {
             <button
               className="button button-primary"
               type="button"
-              disabled={!selectedRange || Boolean(rangeValidation)}
+              disabled={!selectedRange || Boolean(rangeValidation) || isReserving}
               onClick={reserveSelectedRange}
             >
-              Reserve
+              {isReserving ? "Reserving…" : "Reserve"}
             </button>
           </div>
         </div>

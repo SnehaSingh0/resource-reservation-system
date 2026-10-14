@@ -1,36 +1,5 @@
 import { apiUrl } from "./apiUrl";
-
-function getCsrfToken() {
-  const cookie = document.cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("csrftoken="));
-  return cookie ? decodeURIComponent(cookie.slice("csrftoken=".length)) : null;
-}
-
-async function requireCsrfToken() {
-  let token = getCsrfToken();
-  if (!token) {
-    const response = await fetch(apiUrl("/auth/csrf/"), {
-      credentials: "include",
-    });
-    if (!response.ok) {
-      throw new Error("Could not prepare a secure request. Refresh and try again.");
-    }
-    const body: unknown = await response.json().catch(() => null);
-    token =
-      typeof body === "object" &&
-      body !== null &&
-      "csrfToken" in body &&
-      typeof body.csrfToken === "string"
-        ? body.csrfToken
-        : null;
-  }
-  if (!token) {
-    throw new Error("The session security token is unavailable. Refresh and try again.");
-  }
-  return token;
-}
+import { requireCsrfToken } from "./csrf";
 
 function describeApiError(payload: unknown, fallback: string): string {
   if (!payload || typeof payload !== "object") return fallback;

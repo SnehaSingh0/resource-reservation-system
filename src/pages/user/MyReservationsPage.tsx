@@ -4,6 +4,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge } from "../../components/StatusBadge";
 import { apiUrl } from "../../api/apiUrl";
+import { requireCsrfToken } from "../../api/csrf";
 
 type BookingStatus = "Confirmed" | "Pending" | "Cancelled";
 
@@ -15,17 +16,6 @@ type Booking = {
   endTime: string;
   status: BookingStatus;
 };
-
-function getCsrfToken() {
-  const csrfCookie = document.cookie
-    .split(";")
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith("csrftoken="));
-
-  return csrfCookie
-    ? decodeURIComponent(csrfCookie.slice("csrftoken=".length))
-    : null;
-}
 
 function formatDisplayDate(dateValue: string) {
   if (!dateValue) return "—";
@@ -50,6 +40,7 @@ export function MyReservationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   async function loadReservations() {
     setLoading(true);
@@ -114,15 +105,11 @@ export function MyReservationsPage() {
   }, [user?.id]);
 
   async function cancelBooking() {
-    if (!bookingToCancel) return;
+    if (!bookingToCancel || isCancelling) return;
 
-    const csrfToken = getCsrfToken();
-    if (!csrfToken) {
-      setError("The session security token is unavailable. Please refresh the page and try again.");
-      return;
-    }
-
+    setIsCancelling(true);
     try {
+      const csrfToken = await requireCsrfToken();
       const response = await fetch(apiUrl(`/reservations/${bookingToCancel.id}/`), {
         method: "DELETE",
         credentials: "include",
@@ -152,6 +139,8 @@ export function MyReservationsPage() {
           ? cancelError.message
           : "Could not cancel this reservation.";
       setError(message);
+    } finally {
+      setIsCancelling(false);
     }
   }
 
@@ -211,6 +200,7 @@ export function MyReservationsPage() {
                         <button
                           className="table-action table-action-danger"
                           type="button"
+                          disabled={isCancelling}
                           onClick={() => setBookingToCancel(booking)}
                         >
                           Cancel
