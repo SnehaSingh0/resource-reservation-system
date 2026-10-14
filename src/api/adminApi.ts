@@ -17,7 +17,14 @@ async function requireCsrfToken() {
     if (!response.ok) {
       throw new Error("Could not prepare a secure request. Refresh and try again.");
     }
-    token = getCsrfToken();
+    const body: unknown = await response.json().catch(() => null);
+    token =
+      typeof body === "object" &&
+      body !== null &&
+      "csrfToken" in body &&
+      typeof body.csrfToken === "string"
+        ? body.csrfToken
+        : null;
   }
   if (!token) {
     throw new Error("The session security token is unavailable. Refresh and try again.");
