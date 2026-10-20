@@ -10,7 +10,6 @@ export function ProfilePage() {
     <main className="profile-page">
       <PageHeading
         title="Profile"
-        description="View your account details and assigned access role."
       />
       <section className="panel profile-details" aria-label="Account details">
         <dl>

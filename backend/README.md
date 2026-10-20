@@ -17,9 +17,10 @@ This backend implements the Tier 2 application layer for the existing frontend d
 - `POST /api/auth/login/`
 - `POST /api/auth/logout/`
 - `GET /api/users/me/`
-- `GET /api/users/`
 
 The CSRF endpoint returns a masked `csrfToken` in its JSON response and sets the CSRF cookie. Cross-origin frontends should send that token in the `X-CSRFToken` header and include credentials so the browser sends the backend's CSRF and session cookies.
+
+With `DEBUG=true`, local development defaults trust Vite origins on `localhost` and `127.0.0.1` ports 5173–5199, covering Vite's automatic port increments. If `CORS_ALLOWED_ORIGINS` or `CSRF_TRUSTED_ORIGINS` is explicitly set, include the exact frontend origin there. Production must continue to use exact HTTPS origins.
 
 ### Resources
 
@@ -45,18 +46,29 @@ The CSRF endpoint returns a masked `csrfToken` in its JSON response and sets the
 
 ### Admin operations
 
+- `GET /api/users/` — list users and their assigned roles (admin only)
+- `POST /api/users/` — create a user (admin only; requires a supported `role`)
 - `GET /api/admin/reservations/`
 - `DELETE /api/admin/reservations/<id>/`
-- `GET /api/admins/`
-- `POST /api/admins/`
+- `GET /api/admins/` — list administrator accounts
+- `POST /api/admins/` — create an administrator account (backward-compatible endpoint)
+- `GET /api/admins/<id>/` — read an administrator account
+- `PUT /api/admins/<id>/` — update email, name, and phone without changing role or password
 - `DELETE /api/admins/<id>/`
+
+User creation accepts only the roles defined by the user model. The role must be provided explicitly; the API does not default new managed accounts to administrator. Passwords are validated and hashed by Django.
 
 ## Business rules
 
 - Resource constraints define allowed booking windows.
+- A weekly constraint marked `is_full_day: true` makes that weekday available for date-only bookings.
+- A full-day reservation sets `is_full_day: true`, omits `start_time` and `end_time`, and reserves every date from `reservation_date` through `end_date` inclusively. Every covered date must allow full-day booking.
+- Timed reservations continue to use `start_time` and `end_time`; the backend validates availability and conflicts for each affected date.
 - Reservations represent occupied periods.
 - Overlapping time windows for the same resource are rejected.
 - Reservation updates and cancellations must respect ownership or admin authorization.
+- Deleting a reservation permanently removes its record. Deleting a resource permanently removes its availability constraints and reservations through the model's cascading foreign keys; the admin interface confirms this impact before sending the delete request.
+- The administrator reservation list includes only confirmed or pending reservations that have not yet ended. Past records remain in the database until their owning reservation or resource is explicitly deleted.
 - The database row for a resource is locked during reservation creation/update to reduce double-booking risk.
 
 ## Implementation order used
@@ -70,7 +82,7 @@ The CSRF endpoint returns a masked `csrfToken` in its JSON response and sets the
 
 ## Database configuration
 
-PostgreSQL is the application's default and intended database. The default connection target is database `resource_reservation_db`, role `resource_user`, host `127.0.0.1`, and port `5432`; set `DB_NAME`, `DB_USER`, `DB_HOST`, and `DB_PORT` to override those values. `DB_PASSWORD` is required and Django stops with a configuration error if it is missing. Incorrect credentials are reported by PostgreSQL when Django attempts to connect.
+PostgreSQL is the application's default and intended database. The default connection target is database `resource_reservation_db`, role `resource_user`, host `127.0.0.1`, and port `5432`; set `DB_NAME`, `DB_USER`, `DB_HOST`, and `DB_PORT` to override those values. `DB_PASSWORD` is required and Django stops with a configuration error if it is missing. Incorrect credentials are reported by PostgreSQL when Django attempts to connect. `DB_SSLMODE` is also supported; the default is `require` for secure hosted databases. Set `DB_SSLMODE=disable` only for a local PostgreSQL installation that intentionally does not use SSL.
 
 Provide `DB_PASSWORD` through a private environment variable or a secret manager. Do not put database passwords in source files, commit them to Git, or assume that a `.env` file is loaded: this project reads process environment variables and does not load `.env` files. `.env` files are ignored by Git if you choose to maintain one locally. In production, configure all connection values and the password through the deployment platform's environment/secret settings.
 

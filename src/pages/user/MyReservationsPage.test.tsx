@@ -19,8 +19,8 @@ describe("MyReservationsPage", () => {
     document.cookie = "csrftoken=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   });
 
-  it("shows cancelled bookings so users can confirm their cancellation was recorded", async () => {
-    let targetStatus = "CONFIRMED";
+  it("hides cancelled bookings and removes the user's booking after cancellation", async () => {
+    let targetExists = true;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -32,13 +32,20 @@ describe("MyReservationsPage", () => {
           });
         }
         if (url.includes("/reservations/3/") && init.method === "DELETE") {
-          targetStatus = "CANCELLED";
-          return new Response(null, { status: 204 });
+          targetExists = false;
+          return new Response(
+            JSON.stringify({ detail: "Reservation cancelled and permanently removed." }),
+            {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+            },
+          );
         }
         if (url.includes("/reservations/")) {
           return new Response(
             JSON.stringify([
-              {
+              ...(targetExists
+                ? [{
                 id: 3,
                 resource_name: "Board Room",
                 reservation_date: "2099-01-15",
@@ -46,8 +53,9 @@ describe("MyReservationsPage", () => {
                 start_time: "10:00:00",
                 end_time: "11:00:00",
                 is_full_day: false,
-                status: targetStatus,
-              },
+                status: "CONFIRMED",
+                }]
+                : []),
               {
                 id: 4,
                 resource_name: "Previously Cancelled Room",
@@ -67,23 +75,22 @@ describe("MyReservationsPage", () => {
 
     render(<MyReservationsPage />);
 
-    // Cancelled bookings are displayed so the user can confirm cancellation was recorded.
     expect(await screen.findByText("Board Room")).toBeTruthy();
-    expect(await screen.findByText("Previously Cancelled Room")).toBeTruthy();
+    expect(screen.queryByText("Previously Cancelled Room")).toBeNull();
+    expect(screen.getByText("Jan 15, 2099 • 10:00–11:00")).toBeTruthy();
 
-    // Cancel the Board Room booking.
     const row = screen.getByText("Board Room").closest("tr");
     if (!row) throw new Error("Reservation row was not rendered.");
     fireEvent.click(within(row).getByRole("button", { name: "Cancel" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel booking" }));
 
-    // After cancellation the Board Room row disappears from the local state
-    // (the component removes it from its in-memory list after a successful DELETE).
     await waitFor(() => {
       expect(screen.queryByText("Board Room")).toBeNull();
     });
-    // Previously Cancelled Room remains visible throughout.
-    expect(screen.getByText("Previously Cancelled Room")).toBeTruthy();
-    expect(targetStatus).toBe("CANCELLED");
+    expect(screen.getByText("No reservations are available yet.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Reservation cancelled and permanently removed.",
+    );
+    expect(targetExists).toBe(false);
   });
 });

@@ -12,7 +12,7 @@ The frontend and backend are separate deployable applications. Authentication us
 
 1. Install the Node.js dependencies with `npm install`.
 2. Copy `.env.example` to `.env.local` and adjust `VITE_API_BASE_URL` only if the local API differs from `http://localhost:8000/api`.
-3. Start Vite with `npm run dev`; create a production build with `npm run build`.
+3. Start Vite with `npm run dev`; create a production build with `npm run build`; run frontend regression tests with `npm test`.
 
 Vite loads `.env.local` automatically. Production builds must define `VITE_API_BASE_URL` in the hosting provider's build environment; otherwise API requests fail with an explicit configuration error rather than targeting localhost.
 
@@ -37,7 +37,7 @@ The User side includes:
 * Resource selection
 * Resource availability calendar
 * Month, Week, and Day calendar views
-* Date and time selection
+* Date and time selection, including date-only full-day bookings when every selected date is configured for full-day availability
 * Reservation summary
 * My Reservations page
 * Reservation cancellation
@@ -83,6 +83,7 @@ For example:
 These constraints represent when a resource **can be reserved**.
 
 They are different from reservations, which represent time periods that are already occupied.
+An administrator can mark a weekly availability window as full-day; only then can users reserve one or more complete dates without entering times.
 
 ---
 
@@ -96,8 +97,8 @@ The Admin side includes:
 * Add Resource
 * Edit Resource
 * Resource Availability Constraints
-* Manage Admins
-* Add Admin
+* Manage administrator accounts
+* Add and edit administrator details
 * Delete Admin
 * User Area access
 
@@ -189,9 +190,9 @@ Admin Dashboard
   |       +--> Edit Resource
   |       +--> Availability Constraints
   |
-  +--> Manage Admins
+  +--> Manage Users
           |
-          +--> Add Admin
+          +--> Add User
           +--> Delete Admin
 ```
 
@@ -213,8 +214,9 @@ Admin Dashboard
 * `/admin/resources` — Manage Resources
 * `/admin/resources/add` — Add Resource
 * `/admin/resources/edit?resourceId=<resource-id>` — Edit Resource / Availability Constraints
-* `/admin/admins` — Manage Admins
-* `/admin/admins/add` — Add Admin
+* `/admin/admins` — Manage administrator accounts
+* `/admin/admins` — Manage Users and roles
+* `/admin/admins/add` — Add User
 
 Some additional routes redirect to the main User or Admin pages for easier navigation.
 

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { createPortal } from "react-dom";
 import { adminApi } from "../../api/adminApi";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PageHeading } from "../../components/PageHeading";
@@ -21,46 +22,329 @@ type Constraint = {
   day_of_week: number;
   start_time: string;
   end_time: string;
+  is_full_day: boolean;
   is_active: boolean;
 };
 
 const weekdays = [
-  { label: "Sun", day: 6 },
-  { label: "Mon", day: 0 },
-  { label: "Tue", day: 1 },
-  { label: "Wed", day: 2 },
-  { label: "Thu", day: 3 },
-  { label: "Fri", day: 4 },
-  { label: "Sat", day: 5 },
+  { short: "Mon", name: "Monday", day: 0 },
+  { short: "Tue", name: "Tuesday", day: 1 },
+  { short: "Wed", name: "Wednesday", day: 2 },
+  { short: "Thu", name: "Thursday", day: 3 },
+  { short: "Fri", name: "Friday", day: 4 },
+  { short: "Sat", name: "Saturday", day: 5 },
+  { short: "Sun", name: "Sunday", day: 6 },
 ];
 
 function formatTime(value: string) {
-  return value.slice(0, 5);
+  const rawValue = value.trim();
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(AM|PM)?$/i.exec(
+    rawValue,
+  );
+  if (!match) return rawValue;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] ?? "0");
+  const fraction = match[4] ?? "";
+  const meridiem = match[5]?.toUpperCase();
+  if (
+    minutes > 59 ||
+    seconds > 59 ||
+    (meridiem ? hours < 1 || hours > 12 : hours > 23)
+  ) {
+    return rawValue;
+  }
+  if (meridiem) {
+    hours = (hours % 12) + (meridiem === "PM" ? 12 : 0);
+  }
+
+  const formatted = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  if (seconds === 0 && !fraction) return formatted;
+  return `${formatted}:${String(seconds).padStart(2, "0")}${fraction ? `.${fraction}` : ""}`;
+}
+
+function timeSortValue(value: string) {
+  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?/.exec(formatTime(value));
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3] ?? "0");
+}
+
+type AvailabilityWindow = {
+  start_time: string;
+  end_time: string;
+  is_full_day: boolean;
+};
+
+type DaySchedule = {
+  name: string;
+  short: string;
+  windows: AvailabilityWindow[];
+  signature: string;
+};
+
+function getDaySchedules(
+  resource: Resource,
+  constraints: Constraint[],
+): DaySchedule[] {
+  const defaultIsFullDay =
+    timeSortValue(resource.default_start_time) === 0 &&
+    formatTime(resource.default_end_time) === "23:59";
+
+  return weekdays.map(({ day, name, short }) => {
+    const windows: AvailabilityWindow[] =
+      constraints.length === 0
+        ? [{
+            start_time: resource.default_start_time,
+            end_time: resource.default_end_time,
+            is_full_day: defaultIsFullDay,
+          }]
+        : constraints
+            .filter(
+              (constraint) =>
+                constraint.day_of_week === day && constraint.is_active,
+            )
+            .sort(
+              (left, right) =>
+                timeSortValue(left.start_time) - timeSortValue(right.start_time),
+            );
+    return {
+      name,
+      short,
+      windows,
+      signature: windows
+        .map((window) =>
+          window.is_full_day
+            ? "full-day"
+            : `${formatTime(window.start_time)}-${formatTime(window.end_time)}`,
+        )
+        .join("|"),
+    };
+  });
+}
+
+function getConsecutiveDayRanges(days: DaySchedule[]) {
+  const ranges: Array<{ start: number; end: number; signature: string }> = [];
+  days.forEach((day, index) => {
+    if (!day.signature) return;
+    const previous = ranges[ranges.length - 1];
+    if (previous && previous.signature === day.signature && previous.end === index - 1) {
+      previous.end = index;
+    } else {
+      ranges.push({ start: index, end: index, signature: day.signature });
+    }
+  });
+  return ranges;
+}
+
+function formatDayRange(days: DaySchedule[], start: number, end: number) {
+  return start === end
+    ? days[start].short
+    : `${days[start].short}–${days[end].short}`;
+}
+
+function formatAvailabilitySummary(resourceId: number, days: DaySchedule[]) {
+  const availableDays = days.filter((day) => day.windows.length > 0);
+  if (!availableDays.length) return "No availability";
+
+  const signatures = new Set(availableDays.map((day) => day.signature));
+  const isUniform = signatures.size === 1;
+  if (isUniform && availableDays[0].windows.every((window) => window.is_full_day)) {
+    const ranges = getConsecutiveDayRanges(days)
+      .map(({ start, end }) => formatDayRange(days, start, end));
+    const dayBlock = availableDays.length === 7 ? "All week" : ranges.join(", ");
+    return (
+      <span className="availability-full-day-summary">
+        {dayBlock} · Full day
+      </span>
+    );
+  }
+
+  if (!isUniform) {
+    return (
+      <span className="availability-varies">
+        <span>Varies ·</span>
+        <AvailabilityDetails resourceId={resourceId} days={days} />
+      </span>
+    );
+  }
+
+  const schedule = availableDays[0].windows
+    .map(
+      (window) =>
+        `${formatTime(window.start_time)} – ${formatTime(window.end_time)}`,
+    )
+    .join(", ");
+  const ranges = getConsecutiveDayRanges(days)
+    .map(({ start, end }) => formatDayRange(days, start, end));
+  const dayBlock =
+    availableDays.length === 7 && ranges.length === 1
+      ? "Mon–Sun"
+      : ranges.join(", ");
+  return (
+    <span className="availability-uniform-summary">
+      {dayBlock} • {schedule}
+    </span>
+  );
+}
+
+function AvailabilityDetails({
+  resourceId,
+  days,
+}: {
+  resourceId: number;
+  days: DaySchedule[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const popoverId = `availability-details-${resourceId}`;
+
+  function updatePosition() {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(280, window.innerWidth - 24);
+    const left = Math.min(
+      Math.max(12, rect.left),
+      Math.max(12, window.innerWidth - width - 12),
+    );
+    const popoverHeight = popoverRef.current?.offsetHeight ?? 300;
+    const top =
+      rect.bottom + popoverHeight + 12 <= window.innerHeight
+        ? rect.bottom + 8
+        : Math.max(12, rect.top - popoverHeight - 8);
+    setPosition({ left, top });
+  }
+
+  function cancelScheduledClose() {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
+  function scheduleClose() {
+    cancelScheduledClose();
+    closeTimerRef.current = window.setTimeout(() => {
+      if (!pinned) setOpen(false);
+    }, 140);
+  }
+
+  useEffect(() => {
+    if (!open) return undefined;
+    updatePosition();
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setPinned(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const handleOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        !triggerRef.current?.contains(target) &&
+        !popoverRef.current?.contains(target)
+      ) {
+        setOpen(false);
+        setPinned(false);
+      }
+    };
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("keydown", handleEscape);
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("pointerdown", handleOutsidePointer);
+      cancelScheduledClose();
+    };
+  }, [open, pinned]);
+
+  return (
+    <span
+      className="availability-details-trigger"
+      onMouseEnter={() => {
+        cancelScheduledClose();
+        setOpen(true);
+      }}
+      onMouseLeave={scheduleClose}
+    >
+      <button
+        aria-controls={popoverId}
+        aria-expanded={open}
+        className="availability-details-link"
+        onBlur={() => {
+          if (!pinned) scheduleClose();
+        }}
+        onClick={() => {
+          cancelScheduledClose();
+          setPinned(!pinned);
+          setOpen(!pinned);
+        }}
+        onFocus={() => setOpen(true)}
+        onMouseEnter={() => {
+          cancelScheduledClose();
+          setOpen(true);
+        }}
+        onMouseLeave={scheduleClose}
+        ref={triggerRef}
+        type="button"
+      >
+        Details
+      </button>
+      {open &&
+        createPortal(
+          <div
+            aria-label="Weekly availability details"
+            className="availability-details-popover"
+            id={popoverId}
+            onMouseEnter={cancelScheduledClose}
+            onMouseLeave={scheduleClose}
+            ref={popoverRef}
+            role="dialog"
+            style={{ left: position.left, top: position.top }}
+          >
+            <div className="availability-details-heading">Weekly schedule</div>
+            <ul className="availability-details-list">
+              {days.map((day) => (
+                <li className="availability-details-row" key={day.name}>
+                  <span>{day.name}</span>
+                  <span className={day.windows.length ? "" : "is-unavailable"}>
+                    {day.windows.length
+                      ? day.windows
+                          .map((window) =>
+                            window.is_full_day
+                              ? "Full Day"
+                              : `${formatTime(window.start_time)} – ${formatTime(window.end_time)}`,
+                          )
+                          .join(", ")
+                      : "🚫 Un-available"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
 }
 
 function formatAvailability(
+  resourceId: number,
   resource: Resource,
   constraints: Constraint[] | undefined,
-) {
+): ReactNode {
   if (constraints === undefined) return "Availability unavailable";
-  if (constraints.length === 0) {
-    return `Every day ${formatTime(resource.default_start_time)}–${formatTime(resource.default_end_time)}`;
-  }
-  return weekdays
-    .map(({ day, label }) => {
-      const windows = constraints
-        .filter((constraint) => constraint.day_of_week === day && constraint.is_active)
-        .sort((left, right) => left.start_time.localeCompare(right.start_time));
-      if (!windows.length) return null;
-      return windows
-        .map(
-          (window) =>
-            `${label} ${formatTime(window.start_time)}–${formatTime(window.end_time)}`,
-        )
-        .join(", ");
-    })
-    .filter((value): value is string => value !== null)
-    .join(" · ") || "No available days";
+  return formatAvailabilitySummary(resourceId, getDaySchedules(resource, constraints));
 }
 
 export function AdminResourcesPage() {
@@ -68,6 +352,9 @@ export function AdminResourcesPage() {
   const [resources, setResources] = useState<Resource[]>([]);
   const [constraintsByResource, setConstraintsByResource] = useState<
     Record<number, Constraint[]>
+  >({});
+  const [availabilityErrors, setAvailabilityErrors] = useState<
+    Record<number, string>
   >({});
   const [resourceToDelete, setResourceToDelete] = useState<Resource | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,24 +369,46 @@ export function AdminResourcesPage() {
     setError("");
     try {
       const nextResources = await adminApi<Resource[]>("/resources/", {}, "Could not load resources.");
-      const constraintEntries = await Promise.all(
-        nextResources.map(async (resource) => [
-          resource.id,
-          await adminApi<Constraint[]>(
-            `/resources/${resource.id}/constraints/`,
-            {},
-            `Could not load availability for ${resource.name}.`,
-          ),
-        ] as const),
-      );
       setResources(nextResources);
-      setConstraintsByResource(Object.fromEntries(constraintEntries));
+      const constraintResults = await Promise.all(
+        nextResources.map(async (resource) => {
+          try {
+            return {
+              id: resource.id,
+              constraints: await adminApi<Constraint[]>(
+                `/resources/${resource.id}/constraints/`,
+                {},
+                `Could not load availability for ${resource.name}.`,
+              ),
+            };
+          } catch (availabilityError) {
+            return {
+              id: resource.id,
+              error: availabilityError instanceof Error
+                ? availabilityError.message
+                : `Could not load availability for ${resource.name}.`,
+            };
+          }
+        }),
+      );
+      const constraints: Record<number, Constraint[]> = {};
+      const availabilityErrors: Record<number, string> = {};
+      constraintResults.forEach((result) => {
+        if (result.constraints !== undefined) {
+          constraints[result.id] = result.constraints;
+        } else if (result.error) {
+          availabilityErrors[result.id] = result.error;
+        }
+      });
+      setConstraintsByResource(constraints);
+      setAvailabilityErrors(availabilityErrors);
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Could not load resources.",
       );
       setResources([]);
       setConstraintsByResource({});
+      setAvailabilityErrors({});
     } finally {
       setLoading(false);
     }
@@ -136,7 +445,6 @@ export function AdminResourcesPage() {
     <div className="content-stack">
       <PageHeading
         title="Manage Resources"
-        description="Set up reservable spaces and equipment."
         action={
           <Link className="button button-primary" to="/admin/resources/add">
             <span aria-hidden="true">＋</span> Add resource
@@ -181,9 +489,14 @@ export function AdminResourcesPage() {
                   </td>
                   <td>{resource.resource_type}</td>
                   <td>{resource.location || "—"}</td>
-                  <td>
+                  <td className="availability-cell">
                     <span className="availability-summary">
-                      {formatAvailability(resource, constraintsByResource[resource.id])}
+                      {availabilityErrors[resource.id] ??
+                        formatAvailability(
+                          resource.id,
+                          resource,
+                          constraintsByResource[resource.id],
+                        )}
                     </span>
                   </td>
                   <td>
@@ -226,7 +539,7 @@ export function AdminResourcesPage() {
       {resourceToDelete && (
         <ConfirmDialog
           title="Delete this resource?"
-          message={`Permanently delete ${resourceToDelete.name}? Resources with reservation history cannot be deleted; deactivate those resources instead.`}
+          message={`Permanently delete ${resourceToDelete.name}, its availability rules, and all related reservations, including current or upcoming bookings? This cannot be undone.`}
           confirmLabel={deleting ? "Deleting…" : "Delete resource"}
           onCancel={() => {
             if (!deleting) setResourceToDelete(null);

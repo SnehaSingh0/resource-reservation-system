@@ -1,12 +1,13 @@
 import io
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from threading import Barrier
 from types import SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db import ProgrammingError
 from django.core.management import call_command
@@ -14,13 +15,20 @@ from django.db import close_old_connections, connection
 from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
-from .models import Reservation, Resource, User
+from .models import Reservation, Resource, ResourceAvailabilityConstraint, User
 from .services import create_or_update_reservation
 from .throttles import LoginIPRateThrottle, LoginRateThrottle
 
 
 class ReservationBusinessRulesTests(TestCase):
     def setUp(self):
+        # Clear the rate-limit cache before every test so that throttle state
+        # from one test (e.g. test_login_attempts_are_rate_limited) does not
+        # bleed into subsequent tests that call the login endpoint.  This does
+        # not weaken rate limiting — it only ensures tests are isolated from
+        # each other.  The rate-limit test still verifies throttle behaviour
+        # within its own execution.
+        cache.clear()
         self.client = APIClient(enforce_csrf_checks=True)
         self.user = User.objects.create_user(
             username="user1",
@@ -40,6 +48,11 @@ class ReservationBusinessRulesTests(TestCase):
             default_start_time=time(9, 0),
             default_end_time=time(18, 0),
         )
+
+    def tearDown(self):
+        # Clear after each test as well, so any throttle state created by this
+        # test cannot affect the next one.
+        cache.clear()
 
     def test_register_user_endpoint_creates_account(self):
         response = self.client.post(
@@ -151,6 +164,57 @@ class ReservationBusinessRulesTests(TestCase):
         current_user_response = self.client.get("/api/users/me/")
         self.assertEqual(current_user_response.status_code, 200)
         self.assertEqual(current_user_response.data["email"], self.user.email)
+
+    def test_login_and_session_cors_support_vite_auto_incremented_ports(self):
+        origin = "http://localhost:5175"
+        self.assertIn(origin, settings.CORS_ALLOWED_ORIGINS)
+        self.assertIn(origin, settings.CSRF_TRUSTED_ORIGINS)
+        csrf_token = self.get_csrf_token()
+        login_response = self.client.post(
+            "/api/auth/login/",
+            {"email": self.user.email, "password": "secretpass123"},
+            format="json",
+            HTTP_ORIGIN=origin,
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(
+            login_response["Access-Control-Allow-Origin"],
+            origin,
+        )
+        self.assertEqual(
+            login_response["Access-Control-Allow-Credentials"],
+            "true",
+        )
+
+        current_user_response = self.client.get(
+            "/api/users/me/",
+            HTTP_ORIGIN=origin,
+        )
+        self.assertEqual(current_user_response.status_code, 200)
+        self.assertEqual(
+            current_user_response["Access-Control-Allow-Origin"],
+            origin,
+        )
+
+    def test_resource_list_requires_login_and_is_readable_after_login(self):
+        anonymous_response = self.client.get("/api/resources/")
+        self.assertEqual(anonymous_response.status_code, 403)
+        self.assertEqual(
+            anonymous_response.data["detail"],
+            "Authentication credentials were not provided.",
+        )
+
+        login_response = self.login_user()
+        self.assertEqual(login_response.status_code, 200)
+        resources_response = self.client.get("/api/resources/")
+
+        self.assertEqual(resources_response.status_code, 200)
+        self.assertEqual(
+            [resource["id"] for resource in resources_response.data],
+            [self.resource.id],
+        )
 
     def test_invalid_credentials_are_rejected(self):
         response = self.login_user(password="incorrect-password")
@@ -310,6 +374,9 @@ class ReservationBusinessRulesTests(TestCase):
     def test_protected_api_is_inaccessible_after_logout(self):
         login_response = self.login_user()
         self.assertEqual(login_response.status_code, 200)
+        resources_response = self.client.get("/api/resources/")
+        self.assertEqual(resources_response.status_code, 200)
+
         logout_response = self.client.post(
             "/api/auth/logout/",
             {},
@@ -320,6 +387,8 @@ class ReservationBusinessRulesTests(TestCase):
 
         response = self.client.get("/api/users/me/")
         self.assertEqual(response.status_code, 403)
+        resources_response = self.client.get("/api/resources/")
+        self.assertEqual(resources_response.status_code, 403)
 
     def test_overlap_reservation_is_rejected(self):
         Reservation.objects.create(
@@ -341,6 +410,358 @@ class ReservationBusinessRulesTests(TestCase):
                 notes="Attempted overlap",
             )
 
+    def test_reservation_api_rejects_missing_and_reversed_dates(self):
+        self.client.force_authenticate(user=self.user)
+        invalid_payloads = (
+            (
+                "missing reservation date",
+                {
+                    "resource": self.resource.id,
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+                "reservation_date",
+            ),
+            (
+                "invalid reservation date",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "not-a-date",
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+                "reservation_date",
+            ),
+            (
+                "missing multi-day start date",
+                {
+                    "resource": self.resource.id,
+                    "end_date": "2025-01-16",
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+                "reservation_date",
+            ),
+            (
+                "missing multi-day end date",
+                {
+                    "resource": self.resource.id,
+                    "start_date": "2025-01-15",
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+                "end_date",
+            ),
+            (
+                "reversed date range",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-16",
+                    "end_date": "2025-01-15",
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+                "end_date",
+            ),
+        )
+
+        for label, payload, error_field in invalid_payloads:
+            with self.subTest(label=label):
+                response = self.client.post(
+                    "/api/reservations/",
+                    payload,
+                    format="json",
+                )
+
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn(error_field, response.data)
+                self.assertFalse(Reservation.objects.exists())
+
+    def test_reservation_api_accepts_single_day_and_multi_day_dates(self):
+        self.client.force_authenticate(user=self.user)
+        multi_day_resource = Resource.objects.create(
+            name="Multi-day Room",
+            resource_type="room",
+            default_start_time=time(0, 0),
+            default_end_time=time(23, 59),
+        )
+        single_day_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "start_time": "10:00",
+                "end_time": "11:00",
+            },
+            format="json",
+        )
+        self.assertEqual(single_day_response.status_code, 201, single_day_response.data)
+        self.assertEqual(
+            single_day_response.data["reservation_date"],
+            "2025-01-15",
+        )
+        self.assertEqual(single_day_response.data["end_date"], "2025-01-15")
+
+        multi_day_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": multi_day_resource.id,
+                "start_date": "2025-01-16",
+                "end_date": "2025-01-17",
+                "start_time": "10:00",
+                "end_time": "11:00",
+            },
+            format="json",
+        )
+        self.assertEqual(multi_day_response.status_code, 201, multi_day_response.data)
+        self.assertEqual(multi_day_response.data["reservation_date"], "2025-01-16")
+        self.assertEqual(multi_day_response.data["end_date"], "2025-01-17")
+        self.assertEqual(Reservation.objects.count(), 2)
+
+    def test_reservation_update_rejects_missing_date_without_changing_record(self):
+        self.client.force_authenticate(user=self.user)
+        reservation = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 15),
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+        )
+
+        response = self.client.put(
+            f"/api/reservations/{reservation.id}/",
+            {
+                "resource": self.resource.id,
+                "start_time": "10:00",
+                "end_time": "11:00",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("reservation_date", response.data)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.reservation_date, date(2025, 1, 15))
+        self.assertEqual(reservation.start_time, time(14, 0))
+        self.assertEqual(Reservation.objects.count(), 1)
+
+    def test_multi_day_reservation_is_valid_when_each_day_falls_inside_availability(self):
+        multi_day_resource = Resource.objects.create(
+            name="Extended Room",
+            resource_type="room",
+            default_start_time=time(0, 0),
+            default_end_time=time(23, 59),
+        )
+
+        reservation = create_or_update_reservation(
+            user=self.user,
+            resource_id=multi_day_resource.id,
+            reservation_date=date(2025, 1, 15),
+            start_time=time(10, 0),
+            end_time=time(12, 0),
+            end_date=date(2025, 1, 16),
+            notes="Two-day booking",
+        )
+
+        self.assertEqual(reservation.reservation_date, date(2025, 1, 15))
+        self.assertEqual(reservation.start_time, time(10, 0))
+        self.assertEqual(reservation.end_time, time(12, 0))
+        self.assertEqual(reservation.status, Reservation.STATUS_CONFIRMED)
+
+    def test_full_day_reservation_covers_inclusive_dates_across_calendar_boundaries(self):
+        resource = Resource.objects.create(
+            name="All Day Room",
+            resource_type="room",
+            default_start_time=time(0, 0),
+            default_end_time=time(23, 59),
+        )
+        self.client.force_authenticate(user=self.user)
+
+        for start_date, end_date, expected_dates in (
+            (
+                "2024-02-28",
+                "2024-03-01",
+                ["2024-02-28", "2024-02-29", "2024-03-01"],
+            ),
+            (
+                "2024-12-31",
+                "2025-01-02",
+                ["2024-12-31", "2025-01-01", "2025-01-02"],
+            ),
+        ):
+            with self.subTest(start_date=start_date):
+                response = self.client.post(
+                    "/api/reservations/",
+                    {
+                        "resource": resource.id,
+                        "reservation_date": start_date,
+                        "end_date": end_date,
+                        "is_full_day": True,
+                    },
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 201, response.data)
+                self.assertTrue(response.data["is_full_day"])
+                self.assertIsNone(response.data["start_time"])
+                self.assertIsNone(response.data["end_time"])
+                self.assertEqual(response.data["status"], Reservation.STATUS_CONFIRMED)
+
+                availability = self.client.get(
+                    f"/api/resources/{resource.id}/availability/",
+                    {"start_date": start_date, "end_date": end_date},
+                )
+                self.assertEqual(availability.status_code, 200)
+                self.assertEqual(
+                    [booking["date"] for booking in availability.data["bookings"]],
+                    expected_dates,
+                )
+                self.assertTrue(
+                    all(booking["is_full_day"] for booking in availability.data["bookings"])
+                )
+
+        self.assertEqual(
+            Reservation.objects.filter(resource=resource).count(),
+            2,
+        )
+
+    def test_full_day_reservation_requires_full_day_availability_on_every_date(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "end_date": "2025-01-16",
+                "is_full_day": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("configured availability", response.data["detail"])
+        self.assertFalse(Reservation.objects.exists())
+
+    def test_full_day_and_timed_reservations_conflict_on_first_middle_and_last_days(self):
+        start_date = date(2025, 1, 15)
+        for offset in range(3):
+            with self.subTest(offset=offset):
+                resource = Resource.objects.create(
+                    name=f"Full Day Conflict {offset}",
+                    resource_type="room",
+                    default_start_time=time(0, 0),
+                    default_end_time=time(23, 59),
+                )
+                Reservation.objects.create(
+                    user=self.user,
+                    resource=resource,
+                    reservation_date=start_date + timedelta(days=offset),
+                    start_time=time(10, 0),
+                    end_time=time(11, 0),
+                    status=Reservation.STATUS_CONFIRMED,
+                )
+
+                with self.assertRaisesMessage(
+                    ValueError,
+                    "This time overlaps an existing reservation for the same resource.",
+                ):
+                    create_or_update_reservation(
+                        user=self.user,
+                        resource_id=resource.id,
+                        reservation_date=start_date,
+                        end_date=start_date + timedelta(days=2),
+                        start_time=None,
+                        end_time=None,
+                        is_full_day=True,
+                    )
+
+        for offset in range(3):
+            with self.subTest(offset=offset, existing_full_day=True):
+                resource = Resource.objects.create(
+                    name=f"Timed Conflict {offset}",
+                    resource_type="room",
+                    default_start_time=time(0, 0),
+                    default_end_time=time(23, 59),
+                )
+                Reservation.objects.create(
+                    user=self.user,
+                    resource=resource,
+                    reservation_date=start_date,
+                    end_date=start_date + timedelta(days=2),
+                    start_time=None,
+                    end_time=None,
+                    is_full_day=True,
+                    status=Reservation.STATUS_CONFIRMED,
+                )
+
+                with self.assertRaisesMessage(
+                    ValueError,
+                    "This time overlaps an existing reservation for the same resource.",
+                ):
+                    create_or_update_reservation(
+                        user=self.user,
+                        resource_id=resource.id,
+                        reservation_date=start_date + timedelta(days=offset),
+                        start_time=time(10, 0),
+                        end_time=time(11, 0),
+                    )
+
+    def test_full_day_constraint_is_saved_and_enforced_for_configured_weekday(self):
+        self.client.force_authenticate(user=self.admin)
+        constraint_response = self.client.post(
+            f"/api/resources/{self.resource.id}/constraints/",
+            {
+                "day_of_week": 2,
+                "start_time": "09:00",
+                "end_time": "10:00",
+                "is_full_day": True,
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(constraint_response.status_code, 201, constraint_response.data)
+        self.assertTrue(constraint_response.data["is_full_day"])
+        self.assertEqual(constraint_response.data["start_time"], "00:00:00")
+        self.assertEqual(constraint_response.data["end_time"], "23:59:00")
+
+        self.client.force_authenticate(user=self.user)
+        reservation_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "is_full_day": True,
+            },
+            format="json",
+        )
+        self.assertEqual(reservation_response.status_code, 201, reservation_response.data)
+
+    def test_multi_day_reservation_rejects_overlaps_across_the_requested_range(self):
+        resource = Resource.objects.create(
+            name="Overnight Room",
+            resource_type="room",
+            default_start_time=time(0, 0),
+            default_end_time=time(23, 59),
+        )
+        Reservation.objects.create(
+            user=self.user,
+            resource=resource,
+            reservation_date=date(2025, 1, 15),
+            start_time=time(9, 0),
+            end_time=time(11, 0),
+            status=Reservation.STATUS_CONFIRMED,
+        )
+
+        with self.assertRaisesMessage(ValueError, "This time overlaps an existing reservation for the same resource."):
+            create_or_update_reservation(
+                user=self.user,
+                resource_id=resource.id,
+                reservation_date=date(2025, 1, 15),
+                start_time=time(10, 30),
+                end_time=time(12, 0),
+                end_date=date(2025, 1, 16),
+                notes="Attempted multi-day overlap",
+            )
+
     def test_user_can_create_valid_reservation(self):
         reservation = create_or_update_reservation(
             user=self.user,
@@ -353,6 +774,45 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertEqual(reservation.user, self.user)
         self.assertEqual(reservation.resource, self.resource)
         self.assertEqual(reservation.status, Reservation.STATUS_CONFIRMED)
+
+    def test_user_can_reserve_custom_minute_ranges_without_conflicts(self):
+        self.client.force_authenticate(user=self.user)
+        first_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "start_time": "10:20",
+                "end_time": "12:20",
+            },
+            format="json",
+        )
+        overlapping_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "start_time": "12:15",
+                "end_time": "12:30",
+            },
+            format="json",
+        )
+        adjacent_response = self.client.post(
+            "/api/reservations/",
+            {
+                "resource": self.resource.id,
+                "reservation_date": "2025-01-15",
+                "start_time": "12:20",
+                "end_time": "12:35",
+            },
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(first_response.data["start_time"], "10:20:00")
+        self.assertEqual(first_response.data["end_time"], "12:20:00")
+        self.assertEqual(overlapping_response.status_code, 400)
+        self.assertEqual(adjacent_response.status_code, 201)
 
     def test_created_reservation_is_persisted_and_visible_only_to_its_owner(self):
         self.client.force_authenticate(user=self.user)
@@ -478,9 +938,23 @@ class ReservationBusinessRulesTests(TestCase):
             f"/api/reservations/{reservation_id}/"
         )
         self.assertEqual(cancel_response.status_code, 200)
+        self.assertFalse(Reservation.objects.filter(pk=reservation_id).exists())
+        replacement_response = self.client.post(
+            "/api/reservations/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(replacement_response.status_code, 201)
+
+        history_response = self.client.get("/api/reservations/")
+        self.assertEqual(history_response.status_code, 200)
+        reservation_history = {
+            item["id"]: item["status"] for item in history_response.data
+        }
+        self.assertNotIn(reservation_id, reservation_history)
         self.assertEqual(
-            Reservation.objects.get(pk=reservation_id).status,
-            Reservation.STATUS_CANCELLED,
+            reservation_history[replacement_response.data["id"]],
+            Reservation.STATUS_CONFIRMED,
         )
 
     def test_regular_user_cannot_manage_admin_resources_or_constraints(self):
@@ -489,6 +963,14 @@ class ReservationBusinessRulesTests(TestCase):
             "/api/resources/",
             {"name": "New Room", "resource_type": "room"},
             format="json",
+        )
+        resource_update_response = self.client.put(
+            f"/api/resources/{self.resource.id}/",
+            {"name": "Unauthorized Update"},
+            format="json",
+        )
+        resource_delete_response = self.client.delete(
+            f"/api/resources/{self.resource.id}/"
         )
         constraint_response = self.client.post(
             f"/api/resources/{self.resource.id}/constraints/",
@@ -501,7 +983,11 @@ class ReservationBusinessRulesTests(TestCase):
             format="json",
         )
         self.assertEqual(resource_response.status_code, 403)
+        self.assertEqual(resource_update_response.status_code, 403)
+        self.assertEqual(resource_delete_response.status_code, 403)
         self.assertEqual(constraint_response.status_code, 403)
+        self.resource.refresh_from_db()
+        self.assertEqual(self.resource.name, "Board Room")
 
     def test_admin_can_create_resource_and_constraint_and_constraint_limits_booking(self):
         self.client.force_authenticate(user=self.admin)
@@ -621,19 +1107,36 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertEqual(delete_resource_response.status_code, 204)
         self.assertFalse(Resource.objects.filter(pk=self.resource.id).exists())
 
-    def test_admin_resource_delete_preserves_reservation_history(self):
-        reservation = Reservation.objects.create(
+    def test_admin_resource_delete_cascades_reservations_and_availability_constraints(self):
+        past_reservation = Reservation.objects.create(
             user=self.user,
             resource=self.resource,
             reservation_date=date(2025, 1, 15),
             start_time=time(14, 0),
             end_time=time(15, 0),
         )
+        future_reservation = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2099, 1, 15),
+            start_time=time(14, 0),
+            end_time=time(15, 0),
+        )
+        constraint = ResourceAvailabilityConstraint.objects.create(
+            resource=self.resource,
+            day_of_week=0,
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+        )
         self.client.force_authenticate(user=self.admin)
         response = self.client.delete(f"/api/resources/{self.resource.id}/")
-        self.assertEqual(response.status_code, 400)
-        self.assertTrue(Resource.objects.filter(pk=self.resource.pk).exists())
-        self.assertTrue(Reservation.objects.filter(pk=reservation.pk).exists())
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Resource.objects.filter(pk=self.resource.pk).exists())
+        self.assertFalse(Reservation.objects.filter(pk=past_reservation.pk).exists())
+        self.assertFalse(Reservation.objects.filter(pk=future_reservation.pk).exists())
+        self.assertFalse(
+            ResourceAvailabilityConstraint.objects.filter(pk=constraint.pk).exists()
+        )
 
     def test_inactive_resource_cannot_be_reserved(self):
         self.resource.is_active = False
@@ -746,7 +1249,7 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertEqual(reversed_range.status_code, 400)
         self.assertEqual(invalid_date.status_code, 400)
 
-    def test_admin_reservation_api_is_admin_only_and_cancels_without_deleting_history(self):
+    def test_admin_reservation_api_is_admin_only_and_permanently_deletes_on_cancel(self):
         reservation = Reservation.objects.create(
             user=self.user,
             resource=self.resource,
@@ -766,8 +1269,153 @@ class ReservationBusinessRulesTests(TestCase):
             f"/api/admin/reservations/{reservation.id}/"
         )
         self.assertEqual(cancel_response.status_code, 200)
-        reservation.refresh_from_db()
-        self.assertEqual(reservation.status, Reservation.STATUS_CANCELLED)
+        self.assertFalse(Reservation.objects.filter(pk=reservation.pk).exists())
+
+    def test_admin_reservation_list_excludes_past_and_cancelled_records(self):
+        past = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 14),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+        )
+        past_full_day = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 14),
+            end_date=date(2025, 1, 14),
+            start_time=None,
+            end_time=None,
+            is_full_day=True,
+        )
+        ended_today = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 15),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+        )
+        ongoing_today = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 15),
+            start_time=time(11, 0),
+            end_time=time(13, 0),
+        )
+        full_day_today = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 15),
+            end_date=date(2025, 1, 15),
+            start_time=None,
+            end_time=None,
+            is_full_day=True,
+        )
+        future = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 16),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+        )
+        cancelled_future = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 17),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            status=Reservation.STATUS_CANCELLED,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        with (
+            patch(
+                "reservations.views.timezone.localdate",
+                return_value=date(2025, 1, 15),
+            ),
+            patch(
+                "reservations.views.timezone.localtime",
+                return_value=datetime(2025, 1, 15, 12, 0),
+            ),
+        ):
+            response = self.client.get("/api/admin/reservations/")
+
+        self.assertEqual(response.status_code, 200)
+        returned_ids = {item["id"] for item in response.data}
+        self.assertEqual(
+            returned_ids,
+            {ongoing_today.id, full_day_today.id, future.id},
+        )
+        self.assertTrue(Reservation.objects.filter(pk=past.pk).exists())
+        self.assertTrue(Reservation.objects.filter(pk=past_full_day.pk).exists())
+        self.assertTrue(Reservation.objects.filter(pk=ended_today.pk).exists())
+        self.assertTrue(Reservation.objects.filter(pk=cancelled_future.pk).exists())
+
+    def test_admin_can_create_users_with_each_supported_role_and_hashed_passwords(self):
+        self.client.force_authenticate(user=self.user)
+        self.assertEqual(self.client.get("/api/users/").status_code, 403)
+        self.assertEqual(
+            self.client.post(
+                "/api/users/",
+                {
+                    "email": "new-user@example.com",
+                    "password": "Strong-User-Pass-47!",
+                    "role": User.ROLE_USER,
+                },
+                format="json",
+            ).status_code,
+            403,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        created_accounts = []
+        for role, email in (
+            (User.ROLE_USER, "new-user@example.com"),
+            (User.ROLE_ADMIN, "new-managed-admin@example.com"),
+        ):
+            password = "Strong-Account-Pass-47!"
+            response = self.client.post(
+                "/api/users/",
+                {
+                    "email": email,
+                    "first_name": "Managed",
+                    "last_name": "Account",
+                    "password": password,
+                    "role": role,
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 201)
+            created_user = User.objects.get(email=email)
+            self.assertEqual(created_user.role, role)
+            self.assertTrue(created_user.check_password(password))
+            created_accounts.append(created_user)
+
+        self.client.force_authenticate(user=created_accounts[0])
+        self.assertEqual(self.client.get("/api/users/").status_code, 403)
+        self.client.force_authenticate(user=created_accounts[1])
+        self.assertEqual(self.client.get("/api/users/").status_code, 200)
+
+    def test_user_creation_requires_an_explicit_supported_role(self):
+        self.client.force_authenticate(user=self.admin)
+        for email, role in (
+            ("missing-role@example.com", None),
+            ("unsupported-role@example.com", "SUPERUSER"),
+        ):
+            payload = {
+                "email": email,
+                "password": "Strong-Account-Pass-47!",
+            }
+            if role is not None:
+                payload["role"] = role
+            response = self.client.post(
+                "/api/users/",
+                payload,
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("role", response.data)
+            self.assertFalse(User.objects.filter(email=email).exists())
 
     def test_admin_account_creation_hashes_password_and_is_admin_only(self):
         admin_payload = {
@@ -788,6 +1436,83 @@ class ReservationBusinessRulesTests(TestCase):
         created_admin = User.objects.get(email=admin_payload["email"])
         self.assertEqual(created_admin.role, User.ROLE_ADMIN)
         self.assertTrue(created_admin.check_password(admin_payload["password"]))
+
+    def test_admin_management_list_excludes_ordinary_users(self):
+        ordinary_user = User.objects.create_user(
+            username="listed-user",
+            email="listed-user@example.com",
+            password="Strong-Listed-User-Pass-47!",
+            role=User.ROLE_USER,
+        )
+        another_admin = User.objects.create_user(
+            username="listed-admin",
+            email="listed-admin@example.com",
+            password="Strong-Listed-Admin-Pass-47!",
+            role=User.ROLE_ADMIN,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/admins/")
+
+        self.assertEqual(response.status_code, 200)
+        returned_ids = {item["id"] for item in response.data}
+        self.assertIn(self.admin.id, returned_ids)
+        self.assertIn(another_admin.id, returned_ids)
+        self.assertNotIn(ordinary_user.id, returned_ids)
+
+    def test_admin_detail_can_edit_safe_fields_without_changing_role_or_password(self):
+        another_admin = User.objects.create_user(
+            username="editable-admin",
+            email="editable-admin@example.com",
+            password="Strong-Editable-Admin-Pass-47!",
+            role=User.ROLE_ADMIN,
+        )
+        original_password = "Strong-Original-Pass-47!"
+        another_admin.set_password(original_password)
+        another_admin.save()
+        self.client.force_authenticate(user=self.admin)
+
+        detail_response = self.client.get(f"/api/admins/{another_admin.id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        update_response = self.client.put(
+            f"/api/admins/{another_admin.id}/",
+            {
+                "email": "updated-admin@example.com",
+                "first_name": "Updated",
+                "last_name": "Administrator",
+                "phone": "555-0123",
+                "role": User.ROLE_USER,
+                "password": "not-allowed-to-change",
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, 200, update_response.data)
+        another_admin.refresh_from_db()
+        self.assertEqual(another_admin.email, "updated-admin@example.com")
+        self.assertEqual(another_admin.first_name, "Updated")
+        self.assertEqual(another_admin.phone, "555-0123")
+        self.assertEqual(another_admin.role, User.ROLE_ADMIN)
+        self.assertTrue(another_admin.check_password(original_password))
+
+    def test_admin_detail_update_rejects_duplicate_email(self):
+        another_admin = User.objects.create_user(
+            username="another-admin",
+            email="another-admin@example.com",
+            password="Strong-Another-Admin-Pass-47!",
+            role=User.ROLE_ADMIN,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.put(
+            f"/api/admins/{another_admin.id}/",
+            {"email": self.admin.email},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        another_admin.refresh_from_db()
+        self.assertEqual(another_admin.email, "another-admin@example.com")
 
     def test_admin_account_creation_rejects_weak_password(self):
         self.client.force_authenticate(user=self.admin)

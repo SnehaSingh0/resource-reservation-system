@@ -8,7 +8,7 @@ const adminNavigation = [
   { label: "Dashboard", to: "/admin", end: true, icon: "dashboard" },
   { label: "Reservations", to: "/admin/reservations", icon: "reservations" },
   { label: "Resources", to: "/admin/resources", icon: "resources" },
-  { label: "Admins", to: "/admin/admins", icon: "admins" },
+  { label: "Users", to: "/admin/admins", icon: "admins" },
 ] as const;
 
 function AdminNavigationIcon({ name }: { name: AdminIconName }) {
@@ -72,7 +72,6 @@ export function AdminLayout() {
       </aside>
       <div className="admin-main">
         <header className="admin-topbar">
-          <span>Resource Reservation System</span>
           <div className="admin-topbar-actions">
             <span className="topbar-context">Admin workspace</span>
             <ProfileMenu />

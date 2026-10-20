@@ -22,6 +22,7 @@ export function ProfileMenu() {
   const { user, logout } = useAuth();
   const menuRef = useRef<HTMLDetailsElement>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   if (!user) return null;
 
   const displayName = getDisplayName(user.first_name, user.last_name, user.email);
@@ -31,8 +32,19 @@ export function ProfileMenu() {
   async function handleLogout() {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
-    await logout();
-    navigate("/login");
+    setLogoutError("");
+    try {
+      await logout();
+      navigate("/login");
+    } catch (error) {
+      setLogoutError(
+        error instanceof Error
+          ? error.message
+          : "Could not end your session. Please try again.",
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   }
 
   function closeMenu() {
@@ -40,7 +52,28 @@ export function ProfileMenu() {
   }
 
   return (
-    <details className="profile-menu" ref={menuRef}>
+    <details
+      className="profile-menu"
+      ref={menuRef}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "touch") closeMenu();
+      }}
+      onBlur={(event) => {
+        if (
+          event.relatedTarget instanceof Node &&
+          event.currentTarget.contains(event.relatedTarget)
+        ) {
+          return;
+        }
+        closeMenu();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && menuRef.current?.open) {
+          closeMenu();
+          menuRef.current.querySelector("summary")?.focus();
+        }
+      }}
+    >
       <summary
         className="user-profile"
         aria-label={`Open profile menu for ${displayName}, ${roleLabel}`}
@@ -69,6 +102,7 @@ export function ProfileMenu() {
             </Link>
           </>
         )}
+        {logoutError && <p className="auth-error" role="alert">{logoutError}</p>}
         <button
           className="profile-menu-logout"
           type="button"

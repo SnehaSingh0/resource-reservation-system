@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { adminApi } from "../../api/adminApi";
 import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge, type Status } from "../../components/StatusBadge";
+import { formatReservationTimeline } from "../../utils/reservationTimeline";
 
 type Resource = {
   id: number;
@@ -14,23 +15,17 @@ type Reservation = {
   user_email: string;
   resource_name: string;
   reservation_date: string;
-  start_time: string;
-  end_time: string;
+  end_date?: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  is_full_day: boolean;
   created_at: string;
   status: "CONFIRMED" | "PENDING" | "CANCELLED";
 };
 
-type Admin = {
+type User = {
   id: number;
 };
-
-function formatDate(value: string) {
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 function displayStatus(status: Reservation["status"]): Status {
   return status === "CONFIRMED"
@@ -41,8 +36,8 @@ function displayStatus(status: Reservation["status"]): Status {
 }
 
 export function AdminDashboardPage() {
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [resources, setResources] = useState<Resource[] | null>(null);
+  const [reservations, setReservations] = useState<Reservation[] | null>(null);
   const [adminCount, setAdminCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -52,29 +47,34 @@ export function AdminDashboardPage() {
     async function loadDashboard() {
       setLoading(true);
       setError("");
-      try {
-        const [nextResources, nextReservations, admins] = await Promise.all([
-          adminApi<Resource[]>("/resources/", {}, "Could not load resources."),
-          adminApi<Reservation[]>("/admin/reservations/", {}, "Could not load reservations."),
-          adminApi<Admin[]>("/admins/", {}, "Could not load administrators."),
-        ]);
-        if (!active) return;
-        setResources(nextResources);
-        setReservations(nextReservations);
-        setAdminCount(admins.length);
-      } catch (loadError) {
-        if (!active) return;
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Could not load the administration overview.",
-        );
-        setResources([]);
-        setReservations([]);
-        setAdminCount(null);
-      } finally {
-        if (active) setLoading(false);
+      const results = await Promise.allSettled([
+        adminApi<Resource[]>("/resources/", {}, "Could not load resources."),
+        adminApi<Reservation[]>("/admin/reservations/", {}, "Could not load reservations."),
+        adminApi<User[]>("/admins/", {}, "Could not load administrators."),
+      ]);
+      if (!active) return;
+
+      const errors: string[] = [];
+      if (results[0].status === "fulfilled") {
+        setResources(results[0].value);
+      } else {
+        setResources(null);
+        errors.push("Could not load resources.");
       }
+      if (results[1].status === "fulfilled") {
+        setReservations(results[1].value);
+      } else {
+        setReservations(null);
+        errors.push("Could not load reservations.");
+      }
+      if (results[2].status === "fulfilled") {
+        setAdminCount(results[2].value.length);
+      } else {
+        setAdminCount(null);
+        errors.push("Could not load administrators.");
+      }
+      setError(errors.join(" "));
+      setLoading(false);
     }
     void loadDashboard();
     return () => {
@@ -84,24 +84,32 @@ export function AdminDashboardPage() {
 
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  const activeReservations = reservations.filter(
+  const activeReservations = (reservations ?? []).filter(
     (reservation) => reservation.status !== "CANCELLED",
   );
   const metrics = [
-    { label: "Total resources", value: resources.length },
+    { label: "Total resources", value: resources?.length ?? null },
     {
       label: "Active resources",
-      value: resources.filter((resource) => resource.is_active).length,
+      value: resources?.filter((resource) => resource.is_active).length ?? null,
     },
-    { label: "Active reservations", value: activeReservations.length },
+    {
+      label: "Active reservations",
+      value: reservations === null ? null : activeReservations.length,
+    },
     {
       label: "Today's reservations",
-      value: activeReservations.filter(
-        (reservation) => reservation.reservation_date === todayKey,
-      ).length,
+      value: reservations === null
+        ? null
+        : activeReservations.filter(
+            (reservation) =>
+              reservation.reservation_date <= todayKey &&
+              (reservation.end_date || reservation.reservation_date) >= todayKey,
+          ).length,
     },
   ];
-  const recentReservations = [...reservations]
+  const recentReservations = [...(reservations ?? [])]
+    .filter((reservation) => reservation.status !== "CANCELLED")
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .slice(0, 3);
 
@@ -109,7 +117,6 @@ export function AdminDashboardPage() {
     <div className="content-stack">
       <PageHeading
         title="Admin Dashboard"
-        description="Manage reservations, resources, and administrator access."
       />
 
       {error && (
@@ -122,7 +129,7 @@ export function AdminDashboardPage() {
         {metrics.map((metric) => (
           <article className="admin-metric-card" key={metric.label}>
             <span>{metric.label}</span>
-            <strong>{loading || error ? "—" : metric.value}</strong>
+            <strong>{loading || metric.value === null ? "—" : metric.value}</strong>
           </article>
         ))}
       </section>
@@ -135,7 +142,7 @@ export function AdminDashboardPage() {
           Manage resources
         </Link>
         <Link className="button button-secondary" to="/admin/admins">
-          Manage admins ({loading || adminCount === null ? "—" : adminCount})
+          Manage users ({loading || adminCount === null ? "—" : adminCount})
         </Link>
       </nav>
 
@@ -143,7 +150,6 @@ export function AdminDashboardPage() {
         <div className="panel-heading">
           <div>
             <h2>Recent reservations</h2>
-            <p>A quick view of the latest booking activity.</p>
           </div>
           <Link className="text-link" to="/admin/reservations">
             View all
@@ -160,8 +166,7 @@ export function AdminDashboardPage() {
                 <tr>
                   <th scope="col">User</th>
                   <th scope="col">Resource</th>
-                  <th scope="col">Date</th>
-                  <th scope="col">Time</th>
+                  <th scope="col">Reservation</th>
                   <th scope="col">Status</th>
                 </tr>
               </thead>
@@ -170,15 +175,16 @@ export function AdminDashboardPage() {
                   <tr key={reservation.id}>
                     <td><strong>{reservation.user_email}</strong></td>
                     <td>{reservation.resource_name}</td>
-                    <td>{formatDate(reservation.reservation_date)}</td>
-                    <td>{reservation.start_time.slice(0, 5)} – {reservation.end_time.slice(0, 5)}</td>
+                    <td>{formatReservationTimeline(reservation)}</td>
                     <td><StatusBadge status={displayStatus(reservation.status)} /></td>
                   </tr>
                 ))}
                 {recentReservations.length === 0 && (
                   <tr>
-                    <td className="empty-table" colSpan={5}>
-                      No reservation activity is available.
+                    <td className="empty-table" colSpan={4}>
+                      {reservations === null
+                        ? "Recent reservations could not be loaded."
+                        : "No reservation activity is available."}
                     </td>
                   </tr>
                 )}

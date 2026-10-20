@@ -5,36 +5,16 @@ import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge } from "../../components/StatusBadge";
 import { apiUrl } from "../../api/apiUrl";
 import { requireCsrfToken } from "../../api/csrf";
+import { formatReservationTimeline } from "../../utils/reservationTimeline";
 
-type BookingStatus = "Confirmed" | "Pending" | "Cancelled";
-// Cancelled is a valid display status — cancelled reservations are shown so the user
-// can confirm their cancellation was recorded.
+type BookingStatus = "Confirmed" | "Pending";
 
 type Booking = {
   id: number | string;
   resource: string;
-  date: string;
-  startTime: string;
-  endTime: string;
+  timeline: string;
   status: BookingStatus;
 };
-
-function formatDisplayDate(dateValue: string) {
-  if (!dateValue) return "—";
-  return new Date(`${dateValue}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function formatDisplayTime(timeValue: string) {
-  if (!timeValue) return "—";
-  return new Date(`2026-01-01T${timeValue}`).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 function getReservationEndDateTime(
   date: string,
@@ -59,6 +39,7 @@ export function MyReservationsPage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
@@ -91,42 +72,23 @@ export function MyReservationsPage() {
 
       const nextBookings: Booking[] = (Array.isArray(payload) ? payload : [])
         .filter((reservation) => {
-          // Always show cancelled reservations so users can confirm their cancellation was recorded.
-          if (reservation.status === "CANCELLED") return true;
-          // For active/pending reservations, hide ones that have already ended.
+          if (reservation.status === "CANCELLED") return false;
           const endDt = getReservationEndDateTime(
             reservation.reservation_date,
             reservation.end_date,
             reservation.end_time,
             reservation.is_full_day,
           );
-          // If end time cannot be determined (null end_time on a timed booking), show it
-          // rather than silently dropping it — the user should be aware of it.
           if (endDt === null) return true;
           return endDt.getTime() >= Date.now();
         })
         .map((reservation) => {
           const normalizedStatus: BookingStatus =
-            reservation.status === "CANCELLED"
-              ? "Cancelled"
-              : reservation.status === "PENDING"
-                ? "Pending"
-                : "Confirmed";
-          const startDate = formatDisplayDate(reservation.reservation_date);
-          const endDate = reservation.end_date ? formatDisplayDate(reservation.end_date) : startDate;
+            reservation.status === "PENDING" ? "Pending" : "Confirmed";
           return {
             id: reservation.id,
             resource: reservation.resource_name,
-            date:
-              reservation.end_date && reservation.end_date !== reservation.reservation_date
-                ? `${startDate} – ${endDate}`
-                : startDate,
-            startTime: reservation.is_full_day
-              ? "All day"
-              : formatDisplayTime(reservation.start_time ?? ""),
-            endTime: reservation.is_full_day
-              ? "All day"
-              : formatDisplayTime(reservation.end_time ?? ""),
+            timeline: formatReservationTimeline(reservation),
             status: normalizedStatus,
           };
         });
@@ -175,6 +137,7 @@ export function MyReservationsPage() {
       );
       setBookingToCancel(null);
       setError("");
+      setNotice("Reservation cancelled and permanently removed.");
     } catch (cancelError) {
       const message =
         cancelError instanceof Error
@@ -205,6 +168,11 @@ export function MyReservationsPage() {
             {error}
           </div>
         )}
+        {notice && (
+          <div className="inline-notice" role="status">
+            {notice}
+          </div>
+        )}
 
         {loading ? (
           <div className="inline-notice" role="status">
@@ -216,9 +184,7 @@ export function MyReservationsPage() {
               <thead>
                 <tr>
                   <th scope="col">Resource</th>
-                  <th scope="col">Date</th>
-                  <th scope="col">Start time</th>
-                  <th scope="col">End time</th>
+                  <th scope="col">Reservation</th>
                   <th scope="col">Status</th>
                   <th scope="col">Actions</th>
                 </tr>
@@ -229,31 +195,25 @@ export function MyReservationsPage() {
                     <td>
                       <strong>{booking.resource}</strong>
                     </td>
-                    <td>{booking.date}</td>
-                    <td>{booking.startTime}</td>
-                    <td>{booking.endTime}</td>
+                    <td>{booking.timeline}</td>
                     <td>
                       <StatusBadge status={booking.status} />
                     </td>
                     <td>
-                      {booking.status !== "Cancelled" ? (
-                        <button
-                          className="table-action table-action-danger"
-                          type="button"
-                          disabled={isCancelling}
-                          onClick={() => setBookingToCancel(booking)}
-                        >
-                          Cancel
-                        </button>
-                      ) : (
-                        <span className="table-muted-action">—</span>
-                      )}
+                      <button
+                        className="table-action table-action-danger"
+                        type="button"
+                        disabled={isCancelling}
+                        onClick={() => setBookingToCancel(booking)}
+                      >
+                        Cancel
+                      </button>
                     </td>
                   </tr>
                 ))}
                 {bookings.length === 0 && (
                   <tr>
-                    <td className="empty-table" colSpan={6}>
+                    <td className="empty-table" colSpan={4}>
                       No reservations are available yet.
                     </td>
                   </tr>
@@ -267,7 +227,7 @@ export function MyReservationsPage() {
       {bookingToCancel && (
         <ConfirmDialog
           title="Cancel this booking?"
-          message={`Cancel your reservation for ${bookingToCancel.resource} on ${bookingToCancel.date}?`}
+          message={`Permanently cancel and remove your reservation for ${bookingToCancel.resource}? This cannot be undone.`}
           confirmLabel="Cancel booking"
           onCancel={() => setBookingToCancel(null)}
           onConfirm={cancelBooking}

@@ -5,22 +5,23 @@ import { adminApi } from "../../api/adminApi";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PageHeading } from "../../components/PageHeading";
 
-type Admin = {
+type ManagedAdmin = {
   id: number;
   first_name: string;
   last_name: string;
   email: string;
+  role: "ADMIN";
 };
 
-function adminName(admin: Admin) {
+function adminName(admin: ManagedAdmin) {
   return `${admin.first_name} ${admin.last_name}`.trim() || admin.email;
 }
 
 export function AdminsPage() {
   const { user } = useAuth();
   const location = useLocation();
-  const [admins, setAdmins] = useState<Admin[]>([]);
-  const [adminToDelete, setAdminToDelete] = useState<Admin | null>(null);
+  const [admins, setAdmins] = useState<ManagedAdmin[]>([]);
+  const [adminToDelete, setAdminToDelete] = useState<ManagedAdmin | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
@@ -32,7 +33,7 @@ export function AdminsPage() {
     setLoading(true);
     setError("");
     try {
-      setAdmins(await adminApi<Admin[]>("/admins/", {}, "Could not load administrators."));
+      setAdmins(await adminApi<ManagedAdmin[]>("/admins/", {}, "Could not load administrators."));
     } catch (loadError) {
       setAdmins([]);
       setError(
@@ -56,15 +57,17 @@ export function AdminsPage() {
       await adminApi<void>(
         `/admins/${adminToDelete.id}/`,
         { method: "DELETE" },
-        "Could not delete this administrator.",
+        "Could not delete this admin.",
       );
       const deletedName = adminName(adminToDelete);
       setAdminToDelete(null);
-      setNotice(`${deletedName} was removed from the administrator accounts.`);
-      await loadAdmins();
+      setNotice(`${deletedName} was removed from the admins.`);
+      setAdmins((current) =>
+        current.filter((admin) => admin.id !== adminToDelete.id),
+      );
     } catch (deleteError) {
       setError(
-        deleteError instanceof Error ? deleteError.message : "Could not delete this administrator.",
+        deleteError instanceof Error ? deleteError.message : "Could not delete this admin.",
       );
       setAdminToDelete(null);
     } finally {
@@ -75,11 +78,10 @@ export function AdminsPage() {
   return (
     <div className="content-stack">
       <PageHeading
-        title="Manage Admins"
-        description="Manage administrator access to this application."
+        title="Manage Users"
         action={
           <Link className="button button-primary" to="/admin/admins/add">
-            <span aria-hidden="true">＋</span> Add admin
+            <span aria-hidden="true">＋</span> Add User
           </Link>
         }
       />
@@ -88,39 +90,46 @@ export function AdminsPage() {
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>
-            <h2>Administrators</h2>
-            <p>{loading ? "Loading…" : `${admins.length} administrators`}</p>
+            <h2>Admins</h2>
           </div>
         </div>
-        <div className="table-scroll" role="region" aria-label="Administrators table" tabIndex={0}>
+        <div className="table-scroll" role="region" aria-label="Admins table" tabIndex={0}>
           <table className="data-table">
             <thead>
-              <tr><th scope="col">Administrator</th><th scope="col">Email address</th><th scope="col">Role</th><th scope="col">Actions</th></tr>
+              <tr><th scope="col">User</th><th scope="col">Email address</th><th scope="col">Role</th><th scope="col">Actions</th></tr>
             </thead>
             <tbody>
-              {!loading && admins.map((admin) => (
-                <tr key={admin.id}>
-                  <td><strong>{adminName(admin)}</strong></td>
-                  <td>{admin.email}</td>
-                  <td><span className="role-chip">Administrator</span></td>
+              {!loading && admins.map((managedAdmin) => (
+                <tr key={managedAdmin.id}>
+                  <td><strong>{adminName(managedAdmin)}</strong></td>
+                  <td>{managedAdmin.email}</td>
+                  <td><span className="role-chip">Admin</span></td>
                   <td>
-                    {admin.id === user?.id ? (
+                    <div className="table-actions">
+                    <Link
+                      className="table-action"
+                      to={`/admin/admins/edit?adminId=${managedAdmin.id}`}
+                    >
+                      Edit
+                    </Link>
+                    {managedAdmin.id === user?.id ? (
                       <span className="table-muted-action">Current account</span>
                     ) : (
                       <button
                         className="table-action table-action-danger"
                         type="button"
-                        onClick={() => setAdminToDelete(admin)}
+                        onClick={() => setAdminToDelete(managedAdmin)}
                       >
-                        Delete
+                        Delete admin
                       </button>
                     )}
+                    </div>
                   </td>
                 </tr>
               ))}
-              {loading && <tr><td className="empty-table" colSpan={4}>Loading administrators…</td></tr>}
+              {loading && <tr><td className="empty-table" colSpan={4}>Loading admins…</td></tr>}
               {!loading && admins.length === 0 && (
-                <tr><td className="empty-table" colSpan={4}>No administrator accounts are available.</td></tr>
+                <tr><td className="empty-table" colSpan={4}>No admins are available.</td></tr>
               )}
             </tbody>
           </table>
@@ -130,7 +139,7 @@ export function AdminsPage() {
       {adminToDelete && (
         <ConfirmDialog
           title="Delete administrator?"
-          message={`Remove ${adminName(adminToDelete)}'s administrator account? The last active administrator and the account currently in use cannot be deleted.`}
+          message={`Remove ${adminName(adminToDelete)}'s admin account? The last active admin and the account currently in use cannot be deleted.`}
           confirmLabel={deleting ? "Deleting…" : "Delete admin"}
           onCancel={() => {
             if (!deleting) setAdminToDelete(null);

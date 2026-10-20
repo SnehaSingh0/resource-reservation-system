@@ -1,24 +1,79 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, PublicOnlyRoute, RequireAuth } from "../auth/AuthContext";
 import { AdminLayout } from "../layouts/AdminLayout";
 import { UserLayout } from "../layouts/UserLayout";
-import { AdminDashboardPage } from "../pages/admin/AdminDashboardPage";
-import { AdminFormPage } from "../pages/admin/AdminFormPage";
-import { AdminReservationsPage } from "../pages/admin/AdminReservationsPage";
-import { AdminResourcesPage } from "../pages/admin/AdminResourcesPage";
-import { AdminsPage } from "../pages/admin/AdminsPage";
-import { ResourceFormPage } from "../pages/admin/ResourceFormPage";
-import { LoginPage } from "../pages/LoginPage";
-import { NotFoundPage } from "../pages/NotFoundPage";
-import { RegistrationPage } from "../pages/RegistrationPage";
-import { MyReservationsPage } from "../pages/user/MyReservationsPage";
-import { ResourcesPage } from "../pages/user/ResourcesPage";
-import { ProfilePage } from "../pages/ProfilePage";
+
+const AdminDashboardPage = lazy(() =>
+  import("../pages/admin/AdminDashboardPage").then((module) => ({
+    default: module.AdminDashboardPage,
+  })),
+);
+const AdminFormPage = lazy(() =>
+  import("../pages/admin/AdminFormPage").then((module) => ({
+    default: module.AdminFormPage,
+  })),
+);
+const AdminReservationsPage = lazy(() =>
+  import("../pages/admin/AdminReservationsPage").then((module) => ({
+    default: module.AdminReservationsPage,
+  })),
+);
+const AdminResourcesPage = lazy(() =>
+  import("../pages/admin/AdminResourcesPage").then((module) => ({
+    default: module.AdminResourcesPage,
+  })),
+);
+const AdminsPage = lazy(() =>
+  import("../pages/admin/AdminsPage").then((module) => ({
+    default: module.AdminsPage,
+  })),
+);
+const ResourceFormPage = lazy(() =>
+  import("../pages/admin/ResourceFormPage").then((module) => ({
+    default: module.ResourceFormPage,
+  })),
+);
+const LoginPage = lazy(() =>
+  import("../pages/LoginPage").then((module) => ({ default: module.LoginPage })),
+);
+const NotFoundPage = lazy(() =>
+  import("../pages/NotFoundPage").then((module) => ({
+    default: module.NotFoundPage,
+  })),
+);
+const RegistrationPage = lazy(() =>
+  import("../pages/RegistrationPage").then((module) => ({
+    default: module.RegistrationPage,
+  })),
+);
+const MyReservationsPage = lazy(() =>
+  import("../pages/user/MyReservationsPage").then((module) => ({
+    default: module.MyReservationsPage,
+  })),
+);
+const ResourcesPage = lazy(() =>
+  import("../pages/user/ResourcesPage").then((module) => ({
+    default: module.ResourcesPage,
+  })),
+);
+const ProfilePage = lazy(() =>
+  import("../pages/ProfilePage").then((module) => ({
+    default: module.ProfilePage,
+  })),
+);
 
 export function AppRouter() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <Suspense
+          fallback={
+            <div className="content-stack" role="status">
+              <div className="inline-notice">Loading page…</div>
+            </div>
+          }
+        >
         <Routes>
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route
@@ -90,6 +145,10 @@ export function AppRouter() {
             <Route path="/admin/admins" element={<AdminsPage />} />
             <Route path="/admin/admins/add" element={<AdminFormPage />} />
             <Route
+              path="/admin/admins/edit"
+              element={<AdminFormPage mode="edit" />}
+            />
+            <Route
               path="/admin/users"
               element={<Navigate to="/admin/admins" replace />}
             />
@@ -97,6 +156,7 @@ export function AppRouter() {
 
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

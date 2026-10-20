@@ -13,6 +13,7 @@ from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework import status
@@ -284,13 +285,12 @@ class ResourceDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        resource = get_object_or_404(Resource, pk=pk)
-        if Reservation.objects.filter(resource=resource).exists():
-            return Response(
-                {"detail": "This resource has reservation history and cannot be deleted. Deactivate it instead."},
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            resource = get_object_or_404(
+                Resource.objects.select_for_update(),
+                pk=pk,
             )
-        resource.delete()
+            resource.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -484,14 +484,50 @@ class ReservationDetailView(APIView):
                 cancel_reservation(reservation, request.user, admin_override=request.user.role == User.ROLE_ADMIN)
         except (PermissionError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"detail": "Reservation cancelled."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "Reservation cancelled and permanently removed."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminReservationListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        reservations = Reservation.objects.select_related("user", "resource").all()
+        today = timezone.localdate()
+        current_time = timezone.localtime().time()
+        timed_reservations_not_ended = (
+            Q(end_date__gt=today)
+            | Q(end_date=today, end_time__gt=current_time)
+            | Q(
+                end_date__isnull=True,
+                reservation_date__gt=today,
+            )
+            | Q(
+                end_date__isnull=True,
+                reservation_date=today,
+                end_time__gt=current_time,
+            )
+        )
+        full_day_reservations_not_ended = (
+            Q(end_date__gte=today)
+            | Q(end_date__isnull=True, reservation_date__gte=today)
+        )
+        reservations = (
+            Reservation.objects.select_related("user", "resource")
+            .filter(
+                status__in=[
+                    Reservation.STATUS_CONFIRMED,
+                    Reservation.STATUS_PENDING,
+                ]
+            )
+            .filter(
+                Q(is_full_day=True, reservation_date__lte=today)
+                & full_day_reservations_not_ended
+                | Q(is_full_day=False)
+                & timed_reservations_not_ended
+            )
+        )
         return Response(ReservationSerializer(reservations, many=True).data)
 
 
@@ -505,7 +541,10 @@ class AdminReservationDeleteView(APIView):
                 cancel_reservation(reservation, request.user, admin_override=True)
         except (PermissionError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"detail": "Reservation cancelled by admin."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "Reservation cancelled and permanently removed by admin."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminListCreateView(APIView):

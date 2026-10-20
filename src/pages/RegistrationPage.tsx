@@ -48,7 +48,6 @@ export function RegistrationPage() {
         <AuthBrand />
         <p className="auth-eyebrow">TEAM PORTAL</p>
         <h1 id="register-title">Create Your Account</h1>
-        <p className="auth-subtitle">Create an account to get started</p>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <AuthField

@@ -62,6 +62,18 @@ def environment_origins(name, default=""):
     ]
 
 
+DEVELOPMENT_FRONTEND_ORIGINS = (
+    [
+        f"http://{host}:{port}"
+        for host in ("localhost", "127.0.0.1")
+        for port in range(5173, 5200)
+    ]
+    if DEBUG
+    else []
+)
+DEFAULT_FRONTEND_ORIGINS = ",".join(DEVELOPMENT_FRONTEND_ORIGINS)
+
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -87,12 +99,12 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = environment_origins(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
+    DEFAULT_FRONTEND_ORIGINS,
 )
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = environment_origins(
     "CSRF_TRUSTED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
+    DEFAULT_FRONTEND_ORIGINS,
 )
 
 ROOT_URLCONF = "resource_reservation_backend.urls"

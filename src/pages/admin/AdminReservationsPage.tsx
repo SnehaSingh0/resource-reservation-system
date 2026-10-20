@@ -3,6 +3,7 @@ import { adminApi } from "../../api/adminApi";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge, type Status } from "../../components/StatusBadge";
+import { formatReservationTimeline } from "../../utils/reservationTimeline";
 
 type Reservation = {
   id: number;
@@ -24,14 +25,6 @@ function displayStatus(status: Reservation["status"]): Status {
       : "Cancelled";
 }
 
-function formatDate(value: string) {
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 export function AdminReservationsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null);
@@ -49,7 +42,9 @@ export function AdminReservationsPage() {
         {},
         "Could not load reservations.",
       );
-      setReservations(result);
+      setReservations(
+        result.filter((reservation) => reservation.status !== "CANCELLED"),
+      );
     } catch (loadError) {
       setReservations([]);
       setError(
@@ -76,13 +71,9 @@ export function AdminReservationsPage() {
         "Could not cancel this reservation.",
       );
       setReservationToCancel(null);
-      setNotice(`Reservation ${reservationToCancel.id} was cancelled.`);
+      setNotice(`Reservation ${reservationToCancel.id} was cancelled and removed.`);
       setReservations((current) =>
-        current.map((reservation) =>
-          reservation.id === reservationToCancel.id
-            ? { ...reservation, status: "CANCELLED" as const }
-            : reservation,
-        ),
+        current.filter((reservation) => reservation.id !== reservationToCancel.id),
       );
     } catch (cancelError) {
       setError(
@@ -102,32 +93,24 @@ export function AdminReservationsPage() {
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>
-            <h2>All reservations</h2>
+            <h2>Active reservations</h2>
           </div>
         </div>
         <div className="table-scroll" role="region" aria-label="Reservations table" tabIndex={0}>
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">User</th><th scope="col">Resource</th><th scope="col">Date</th>
-                <th scope="col">Start time</th><th scope="col">End time</th><th scope="col">Status</th><th scope="col">Action</th>
+                <th scope="col">User</th><th scope="col">Resource</th><th scope="col">Reservation</th>
+                <th scope="col">Status</th><th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
               {!loading && reservations.map((reservation) => {
-                const endDate = reservation.end_date || reservation.reservation_date;
-                const dateLabel =
-                  reservation.end_date && reservation.end_date !== reservation.reservation_date
-                    ? `${formatDate(reservation.reservation_date)} – ${formatDate(endDate)}`
-                    : formatDate(reservation.reservation_date);
-
                 return (
                   <tr key={reservation.id}>
                     <td><strong>{reservation.user_email}</strong></td>
                     <td>{reservation.resource_name}</td>
-                    <td>{dateLabel}</td>
-                    <td>{reservation.is_full_day ? "All day" : reservation.start_time?.slice(0, 5)}</td>
-                    <td>{reservation.is_full_day ? "All day" : reservation.end_time?.slice(0, 5)}</td>
+                    <td>{formatReservationTimeline(reservation)}</td>
                     <td><StatusBadge status={displayStatus(reservation.status)} /></td>
                     <td>
                       {reservation.status !== "CANCELLED" ? (
@@ -145,9 +128,9 @@ export function AdminReservationsPage() {
                   </tr>
                 );
               })}
-              {loading && <tr><td className="empty-table" colSpan={7}>Loading reservations…</td></tr>}
+              {loading && <tr><td className="empty-table" colSpan={5}>Loading reservations…</td></tr>}
               {!loading && reservations.length === 0 && (
-                <tr><td className="empty-table" colSpan={7}>No reservations found.</td></tr>
+                <tr><td className="empty-table" colSpan={5}>No active reservations found.</td></tr>
               )}
             </tbody>
           </table>
@@ -157,7 +140,7 @@ export function AdminReservationsPage() {
       {reservationToCancel && (
         <ConfirmDialog
           title="Cancel this reservation?"
-          message={`Cancel ${reservationToCancel.user_email}'s reservation for ${reservationToCancel.resource_name}? The reservation record will be retained with a cancelled status.`}
+          message={`Permanently cancel and remove ${reservationToCancel.user_email}'s reservation for ${reservationToCancel.resource_name}? This cannot be undone.`}
           confirmLabel={cancelling ? "Cancelling…" : "Cancel reservation"}
           onCancel={() => {
             if (!cancelling) setReservationToCancel(null);

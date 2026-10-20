@@ -25,6 +25,7 @@ export type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
+  authError: string | null;
   login: (email: string, password: string) => Promise<AuthUser>;
   register: (input: {
     fullName: string;
@@ -41,8 +42,11 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const refreshUser = useCallback(async () => {
+    setIsLoading(true);
+    setAuthError(null);
     try {
       const response = await fetch(apiUrl("/users/me/"), {
         credentials: "include",
@@ -54,15 +58,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!response.ok) {
-        setUser(null);
-        return null;
+        throw new Error("Could not verify your session. Please try again.");
       }
 
       const nextUser = (await response.json()) as AuthUser;
       setUser(nextUser);
       return nextUser;
-    } catch {
+    } catch (error) {
       setUser(null);
+      setAuthError(
+        error instanceof TypeError
+          ? "Could not connect to the server to verify your session."
+          : error instanceof Error
+            ? error.message
+            : "Could not verify your session. Please try again.",
+      );
       return null;
     } finally {
       setIsLoading(false);
@@ -74,39 +84,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const csrfToken = await requireCsrfToken();
+    try {
+      const csrfToken = await requireCsrfToken();
 
-    const response = await fetch(apiUrl("/auth/login/"), {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": csrfToken,
-      },
-      body: JSON.stringify({ email, password }),
-    });
+      const response = await fetch(apiUrl("/auth/login/"), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({ email, password }),
+      });
 
-    const responseBody: unknown = await response.json().catch(() => ({}));
+      const responseBody: unknown = await response.json().catch(() => ({}));
 
-    if (response.status === 401) {
-      const detail =
-        typeof responseBody === "object" && responseBody && "detail" in responseBody
-          ? String((responseBody as { detail?: string }).detail)
-          : "Email or password is incorrect.";
-      throw new Error(detail || "Email or password is incorrect.");
+      if (response.status === 401) {
+        const detail =
+          typeof responseBody === "object" && responseBody && "detail" in responseBody
+            ? String((responseBody as { detail?: string }).detail)
+            : "Email or password is incorrect.";
+        throw new Error(detail || "Email or password is incorrect.");
+      }
+
+      if (response.status === 403) {
+        throw new Error("Login security check failed. Refresh the page and try again.");
+      }
+
+      if (!response.ok || typeof responseBody !== "object" || responseBody === null || !("user" in responseBody)) {
+        throw new Error("The server returned an unexpected login response.");
+      }
+
+      const nextUser = responseBody.user as AuthUser;
+      setAuthError(null);
+      setUser(nextUser);
+      return nextUser;
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error("Could not connect to the server. Check that the backend is running and try again.");
+      }
+      throw error;
     }
-
-    if (response.status === 403) {
-      throw new Error("Login security check failed. Refresh the page and try again.");
-    }
-
-    if (!response.ok || typeof responseBody !== "object" || responseBody === null || !("user" in responseBody)) {
-      throw new Error("The server returned an unexpected login response.");
-    }
-
-    const nextUser = responseBody.user as AuthUser;
-    setUser(nextUser);
-    return nextUser;
   }, []);
 
   const register = useCallback(
@@ -155,7 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try {
       const csrfToken = await requireCsrfToken();
-      await fetch(apiUrl("/auth/logout/"), {
+      const response = await fetch(apiUrl("/auth/logout/"), {
         method: "POST",
         credentials: "include",
         headers: {
@@ -163,10 +181,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           "X-CSRFToken": csrfToken,
         },
       });
-    } catch {
-      // Continue to end the local session even if the backend request fails.
-    } finally {
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          const sessionResponse = await fetch(apiUrl("/users/me/"), {
+            credentials: "include",
+          });
+          if (sessionResponse.status === 401 || sessionResponse.status === 403) {
+            setAuthError(null);
+            setUser(null);
+            return;
+          }
+          if (!sessionResponse.ok) {
+            throw new Error("Could not verify your session status. Please try logging out again.");
+          }
+        }
+        throw new Error("Could not end your session. Please try again.");
+      }
+      setAuthError(null);
       setUser(null);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error("Could not connect to the server to end your session. Please try again.");
+      }
+      throw error;
     }
   }, []);
 
@@ -174,12 +211,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       isLoading,
+      authError,
       login,
       register,
       logout,
       refreshUser,
     }),
-    [user, isLoading, login, register, logout, refreshUser],
+    [user, isLoading, authError, login, register, logout, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -201,7 +239,7 @@ export function RequireAuth({
   children: ReactNode;
   requireAdmin?: boolean;
 }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authError, refreshUser } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
@@ -209,6 +247,19 @@ export function RequireAuth({
       <main className="auth-page">
         <section className="auth-card" aria-live="polite">
           <p className="auth-subtitle">Checking your session...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (authError) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card" aria-live="polite">
+          <p className="auth-error" role="alert">{authError}</p>
+          <button className="auth-submit" type="button" onClick={() => void refreshUser()}>
+            Retry
+          </button>
         </section>
       </main>
     );

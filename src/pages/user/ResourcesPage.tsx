@@ -1,10 +1,14 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { PageHeading } from "../../components/PageHeading";
@@ -30,6 +34,7 @@ type AvailabilityConstraint = {
   day_of_week: number;
   start_time: string;
   end_time: string;
+  is_full_day: boolean;
   is_active: boolean;
 };
 
@@ -40,8 +45,9 @@ type BookingPayload = {
   resource: number;
   resource_name: string;
   reservation_date: string;
-  start_time: string;
-  end_time: string;
+  start_time: string | null;
+  end_time: string | null;
+  is_full_day: boolean;
   status: "CONFIRMED" | "PENDING" | "CANCELLED";
   notes?: string;
 };
@@ -55,26 +61,24 @@ type DateAvailability =
   | "unavailable";
 type TimeRange = {
   date: string;
+  startDate?: string;
+  endDate?: string;
   resourceId: string;
   start: number;
   end: number;
+  isFullDay?: boolean;
 };
-type DragRange = TimeRange & {
-  current: number;
+type DragRange = {
+  date: string;
+  resourceId: string;
+  startMinute: number;
+  currentMinute: number;
 };
 
-const FIRST_HOUR = 8;
-const LAST_HOUR = 18;
-const SLOT_COUNT = LAST_HOUR - FIRST_HOUR;
-const SLOT_STARTS = Array.from(
-  { length: SLOT_COUNT },
-  (_, index) => FIRST_HOUR + index,
-);
-const TIME_BOUNDARIES = Array.from(
-  { length: SLOT_COUNT + 1 },
-  (_, index) => FIRST_HOUR + index,
-);
+const SLOT_MINUTES = 15;
+const HOUR_HEIGHT_PX = 64;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SELECTED_RESOURCE_STORAGE_KEY = "resource-reservation.selected-resource";
 
 function toDateKey(date: Date) {
   const year = date.getFullYear();
@@ -93,20 +97,44 @@ function addDays(date: Date, count: number) {
   return next;
 }
 
+function getDateKeysInRange(startDate: string, endDate: string) {
+  if (!startDate || !endDate || endDate < startDate) return [];
+  const firstDay = fromDateKey(startDate);
+  const lastDay = fromDateKey(endDate);
+  if (Number.isNaN(firstDay.getTime()) || Number.isNaN(lastDay.getTime())) return [];
+  const dates: string[] = [];
+  for (let current = firstDay; current <= lastDay; current = addDays(current, 1)) {
+    dates.push(toDateKey(current));
+  }
+  return dates;
+}
+
 function formatDate(value: string, options: Intl.DateTimeFormatOptions) {
   return fromDateKey(value).toLocaleDateString("en-US", options);
 }
 
-function formatHour(hour: number) {
-  const date = new Date(2026, 0, 1, hour);
+function formatTime(minutes: number) {
+  const date = new Date(2026, 0, 1, Math.floor(minutes / 60), minutes % 60);
   return date.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
   });
 }
 
-function formatHourRange(start: number, end: number) {
-  return `${formatHour(start)} – ${formatHour(end)}`;
+function formatTimeRange(start: number, end: number) {
+  return `${formatTime(start)} – ${formatTime(end)}`;
+}
+
+function toTimeInputValue(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function formatDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours && remainingMinutes) return `${hours} hr ${remainingMinutes} min`;
+  if (hours) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${remainingMinutes} minutes`;
 }
 
 function getResourceById(resourceId: number | string, resources: Resource[]) {
@@ -131,39 +159,93 @@ function normalizeBackendAvailabilityWindow(resource: Resource | undefined) {
   };
 }
 
+function getAvailabilityWindows(
+  resource: Resource | undefined,
+  dateKey: string,
+  constraints: AvailabilityConstraint[],
+) {
+  if (!resource?.is_active) return [];
+  if (constraints.length === 0) {
+    const defaultWindow = normalizeBackendAvailabilityWindow(resource);
+    const fullDay =
+      defaultWindow.startTime === 0 && defaultWindow.endTime === 23 * 60 + 59;
+    return [{
+      start: defaultWindow.startTime,
+      end: fullDay ? 24 * 60 : defaultWindow.endTime,
+      isFullDay: fullDay,
+    }];
+  }
+
+  const backendWeekday = (fromDateKey(dateKey).getDay() + 6) % 7;
+  return constraints
+    .filter(
+      (constraint) =>
+        constraint.day_of_week === backendWeekday && constraint.is_active,
+    )
+    .map((constraint) => ({
+      start: parseTimeToMinutes(constraint.start_time),
+      end: constraint.is_full_day
+        ? 24 * 60
+        : parseTimeToMinutes(constraint.end_time),
+      isFullDay: constraint.is_full_day,
+    }))
+    .filter((window) => window.end > window.start)
+    .sort((first, second) => first.start - second.start);
+}
+
+function getTimeOptions(
+  windows: Array<{ start: number; end: number }>,
+  includeWindowEnd: boolean,
+) {
+  const minutes = new Set<number>();
+  windows.forEach((window) => {
+    for (let minute = window.start; minute < window.end; minute += SLOT_MINUTES) {
+      minutes.add(minute);
+    }
+    if (includeWindowEnd) {
+      minutes.add(Math.min(window.end, 23 * 60 + 59));
+    }
+  });
+  return Array.from(minutes)
+    .sort((first, second) => first - second)
+    .map(toTimeInputValue);
+}
+
+function getEndTimeOptions(
+  windows: Array<{ start: number; end: number }>,
+  startTime: string,
+  isSameDay: boolean,
+) {
+  const startMinutes = parseTimeToMinutes(startTime);
+  const eligibleWindows = isSameDay
+    ? windows.filter(
+        (window) =>
+          startMinutes >= window.start && startMinutes < window.end,
+      )
+    : windows;
+  return getTimeOptions(eligibleWindows, true).filter(
+    (time) => !isSameDay || parseTimeToMinutes(time) > startMinutes,
+  );
+}
+
 function getSlotStatus(
   resource: Resource | undefined,
   dateKey: string,
-  slotIndex: number,
+  slotStartMinutes: number,
   reservations: BookingPayload[] = [],
   constraints: AvailabilityConstraint[] = [],
 ): SlotStatus {
   if (!resource) return "unavailable";
 
-  const availability = normalizeBackendAvailabilityWindow(resource);
-  const slotStartMinutes = (FIRST_HOUR + slotIndex) * 60;
-  const slotEndMinutes = slotStartMinutes + 60;
-
+  const slotEndMinutes = slotStartMinutes + SLOT_MINUTES;
+  const dayWindows = getAvailabilityWindows(resource, dateKey, constraints);
   if (
-    !resource.is_active ||
-    slotStartMinutes < availability.startTime ||
-    slotEndMinutes > availability.endTime
+    !dayWindows.some(
+      (window) =>
+        slotStartMinutes >= window.start && slotEndMinutes <= window.end,
+    )
   ) {
     return "unavailable";
-  }
-
-  if (constraints.length > 0) {
-    const backendWeekday = (fromDateKey(dateKey).getDay() + 6) % 7;
-    const dayWindows = constraints.filter(
-      (constraint) =>
-        constraint.day_of_week === backendWeekday && constraint.is_active,
-    );
-    const insideConfiguredWindow = dayWindows.some(
-      (constraint) =>
-        slotStartMinutes >= parseTimeToMinutes(constraint.start_time) &&
-        slotEndMinutes <= parseTimeToMinutes(constraint.end_time),
-    );
-    if (!insideConfiguredWindow) return "unavailable";
   }
 
   const hasBooking = reservations.some((reservation) => {
@@ -175,6 +257,7 @@ function getSlotStatus(
       return false;
     }
 
+    if (reservation.is_full_day) return true;
     const reservationStartMinutes = parseTimeToMinutes(reservation.start_time);
     const reservationEndMinutes = parseTimeToMinutes(reservation.end_time);
     return (
@@ -184,6 +267,72 @@ function getSlotStatus(
   });
 
   return hasBooking ? "booked" : "available";
+}
+
+function isFullDayAvailable(
+  resource: Resource | undefined,
+  dateKey: string,
+  constraints: AvailabilityConstraint[],
+) {
+  if (!resource?.is_active) return false;
+  const windows = getAvailabilityWindows(resource, dateKey, constraints);
+  return windows.some((window) => window.isFullDay);
+}
+
+function getWeekdayFullDayAvailability(
+  resource: Resource,
+  constraints: AvailabilityConstraint[],
+) {
+  const monday = new Date(2024, 0, 1, 12);
+  return Array.from({ length: 7 }, (_, weekday) =>
+    getAvailabilityWindows(
+      resource,
+      toDateKey(addDays(monday, weekday)),
+      constraints,
+    ).some((window) => window.isFullDay),
+  );
+}
+
+function hasResourceAvailability(
+  resource: Resource,
+  constraints: AvailabilityConstraint[],
+) {
+  const monday = new Date(2024, 0, 1, 12);
+  return Array.from({ length: 7 }, (_, weekday) =>
+    getAvailabilityWindows(
+      resource,
+      toDateKey(addDays(monday, weekday)),
+      constraints,
+    ).length > 0,
+  ).some(Boolean);
+}
+
+function supportsMultiDayReservations(
+  resource: Resource,
+  constraints: AvailabilityConstraint[],
+) {
+  const fullDayByWeekday = getWeekdayFullDayAvailability(resource, constraints);
+  return fullDayByWeekday.some(
+    (available, weekday) =>
+      available && fullDayByWeekday[(weekday + 1) % fullDayByWeekday.length],
+  );
+}
+
+function isFullDayOnlyResource(
+  resource: Resource,
+  constraints: AvailabilityConstraint[],
+) {
+  const monday = new Date(2024, 0, 1, 12);
+  const windowsByWeekday = Array.from({ length: 7 }, (_, weekday) =>
+    getAvailabilityWindows(
+      resource,
+      toDateKey(addDays(monday, weekday)),
+      constraints,
+    ),
+  );
+  const activeWindows = windowsByWeekday.flat();
+  return activeWindows.length > 0 &&
+    activeWindows.every((window) => window.isFullDay);
 }
 
 function validateRange(
@@ -196,17 +345,75 @@ function validateRange(
     return "Select a valid resource before choosing a time range.";
   }
 
-  if (range.end <= range.start) {
+  const startDate = range.startDate ?? range.date;
+  const endDate = range.endDate ?? range.date;
+  if (!startDate || !endDate) {
+    return "Choose a valid start and end date.";
+  }
+  if (endDate < startDate) {
+    return "Choose an end date on or after the start date.";
+  }
+
+  if (!resource.is_active) {
+    return `${resource.name} is not available for reservations.`;
+  }
+
+  const datesInRange = getDateKeysInRange(startDate, endDate);
+
+  if (range.isFullDay) {
+    for (const dateKey of datesInRange) {
+      if (!isFullDayAvailable(resource, dateKey, constraints)) {
+        return `${resource.name} is not configured for full-day reservations on every selected date.`;
+      }
+      if (
+        reservations.some(
+          (reservation) =>
+            reservation.status !== "CANCELLED" &&
+            reservation.resource === resource.id &&
+            reservation.reservation_date === dateKey,
+        )
+      ) {
+        return `The selected date overlaps an existing reservation for ${resource.name}.`;
+      }
+    }
+    return "";
+  }
+
+  if (startDate === endDate && range.end <= range.start) {
     return "Choose an end time after the start time.";
   }
 
-  for (let slot = range.start; slot < range.end; slot += 1) {
-    const status = getSlotStatus(resource, range.date, slot, reservations, constraints);
-    if (status === "booked") {
-      return `${formatHour(FIRST_HOUR + slot)} is already booked for ${resource.name}. Choose a continuous available range.`;
+  for (const dateKey of datesInRange) {
+    const dayWindows = getAvailabilityWindows(resource, dateKey, constraints);
+    const firstDay = dateKey === startDate;
+    const lastDay = dateKey === endDate;
+    const dayStart = firstDay ? range.start : 0;
+    const dayEnd = lastDay ? range.end : 24 * 60;
+    if (
+      !dayWindows.some(
+        (window) => dayStart >= window.start && dayEnd <= window.end,
+      )
+    ) {
+      return `${resource.name} is not available for the full selected time range.`;
     }
-    if (status === "unavailable") {
-      return `${formatHour(FIRST_HOUR + slot)} is outside ${resource.name}'s configured availability. Choose a continuous available range.`;
+
+    const hasConflict = reservations.some((reservation) => {
+      if (
+        reservation.status === "CANCELLED" ||
+        reservation.resource !== resource.id ||
+        reservation.reservation_date !== dateKey
+      ) {
+        return false;
+      }
+
+      if (reservation.is_full_day) return true;
+      return (
+        dayStart < parseTimeToMinutes(reservation.end_time) &&
+        dayEnd > parseTimeToMinutes(reservation.start_time)
+      );
+    });
+    if (hasConflict) {
+      return `The selected time overlaps an existing reservation for ${resource.name}.`;
     }
   }
 
@@ -223,8 +430,24 @@ function getDateAvailability(
     return "unavailable";
   }
 
-  const statuses = SLOT_STARTS.map((slot) =>
-    getSlotStatus(resource, dateKey, slot - FIRST_HOUR, reservations, constraints),
+  const defaultWindow = normalizeBackendAvailabilityWindow(resource);
+  const dayWindows = getAvailabilityWindows(resource, dateKey, constraints);
+  const start = dayWindows.length
+    ? Math.min(...dayWindows.map((window) => window.start))
+    : defaultWindow.startTime;
+  const end = dayWindows.length
+    ? Math.max(...dayWindows.map((window) => window.end))
+    : defaultWindow.endTime;
+  const statuses = Array.from(
+    { length: Math.max(0, Math.ceil((end - start) / SLOT_MINUTES)) },
+    (_, index) =>
+      getSlotStatus(
+        resource,
+        dateKey,
+        start + index * SLOT_MINUTES,
+        reservations,
+        constraints,
+      ),
   );
   const availableCount = statuses.filter(
     (status) => status === "available",
@@ -256,6 +479,208 @@ function getMonthDates(selectedDate: Date) {
   );
 }
 
+type ReservationDatePickerProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+function ReservationDatePicker({
+  label,
+  value,
+  onChange,
+}: ReservationDatePickerProps) {
+  const pickerId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const selectedDate = fromDateKey(value);
+  const [isOpen, setIsOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(
+    () => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1, 12),
+  );
+  const [popoverPosition, setPopoverPosition] = useState({
+    top: 0,
+    left: 0,
+    visibility: "hidden" as "hidden" | "visible",
+  });
+  const monthDates = useMemo(
+    () => getMonthDates(visibleMonth),
+    [visibleMonth.getFullYear(), visibleMonth.getMonth()],
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function updatePopoverPosition() {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = window.innerHeight;
+      const width = Math.min(304, viewportWidth - 16);
+      const popupHeight =
+        popoverRef.current?.getBoundingClientRect().height ?? 292;
+      const left = Math.max(
+        8,
+        Math.min(bounds.left, viewportWidth - width - 8),
+      );
+      const maxTop = Math.max(8, viewportHeight - popupHeight - 8);
+      const top =
+        bounds.bottom + popupHeight + 4 <= viewportHeight - 8
+          ? Math.min(bounds.bottom + 4, maxTop)
+          : Math.max(8, Math.min(bounds.top - popupHeight - 4, maxTop));
+      setPopoverPosition({ top, left, visibility: "visible" });
+    }
+
+    function dismissOnOutsidePointer(event: globalThis.PointerEvent) {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        !triggerRef.current?.contains(target) &&
+        !popoverRef.current?.contains(target)
+      ) {
+        setIsOpen(false);
+      }
+    }
+
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+
+    updatePopoverPosition();
+    document.addEventListener("pointerdown", dismissOnOutsidePointer);
+    document.addEventListener("keydown", dismissOnEscape);
+    window.addEventListener("resize", updatePopoverPosition);
+    window.addEventListener("scroll", updatePopoverPosition, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnOutsidePointer);
+      document.removeEventListener("keydown", dismissOnEscape);
+      window.removeEventListener("resize", updatePopoverPosition);
+      window.removeEventListener("scroll", updatePopoverPosition, true);
+    };
+  }, [isOpen]);
+
+  function moveMonth(direction: -1 | 1) {
+    setVisibleMonth(
+      (current) =>
+        new Date(current.getFullYear(), current.getMonth() + direction, 1, 12),
+    );
+  }
+
+  function selectDate(date: string) {
+    onChange(date);
+    setVisibleMonth(fromDateKey(date));
+    setIsOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        aria-controls={pickerId}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label={label}
+        className="reservation-date-picker-trigger"
+        onClick={() => {
+          if (!isOpen) setVisibleMonth(fromDateKey(value));
+          setIsOpen((current) => !current);
+        }}
+        ref={triggerRef}
+        type="button"
+      >
+        <span>{formatDate(value, { month: "short", day: "numeric", year: "numeric" })}</span>
+        <svg aria-hidden="true" viewBox="0 0 16 16">
+          <rect x="2.25" y="3.5" width="11.5" height="10" rx="1.5" />
+          <path d="M5 2.5v2M11 2.5v2M2.5 6.5h11" />
+        </svg>
+      </button>
+      {isOpen &&
+        createPortal(
+          <div
+            aria-label={`Choose ${label} date`}
+            className="reservation-date-picker-popover"
+            id={pickerId}
+            ref={popoverRef}
+            role="dialog"
+            data-visible-month={`${visibleMonth.getFullYear()}-${String(
+              visibleMonth.getMonth() + 1,
+            ).padStart(2, "0")}`}
+            style={{
+              top: popoverPosition.top,
+              left: popoverPosition.left,
+              visibility: popoverPosition.visibility,
+            }}
+          >
+            <div className="reservation-date-picker-header">
+              <button
+                aria-label="Previous month"
+                className="reservation-date-picker-nav"
+                onClick={() => moveMonth(-1)}
+                type="button"
+              >
+                ‹
+              </button>
+              <strong>
+                {visibleMonth.toLocaleDateString("en-US", {
+                  month: "long",
+                  year: "numeric",
+                })}
+              </strong>
+              <button
+                aria-label="Next month"
+                className="reservation-date-picker-nav"
+                onClick={() => moveMonth(1)}
+                type="button"
+              >
+                ›
+              </button>
+            </div>
+            <div aria-hidden="true" className="reservation-date-picker-weekdays">
+              {WEEKDAYS.map((weekday) => (
+                <span key={weekday}>{weekday.slice(0, 1)}</span>
+              ))}
+            </div>
+            <div className="reservation-date-picker-days">
+              {monthDates.map((date) => {
+                const dateObject = fromDateKey(date);
+                const isCurrentMonth =
+                  dateObject.getMonth() === visibleMonth.getMonth();
+                return (
+                  <button
+                    aria-label={formatDate(date, {
+                      weekday: "long",
+                      month: "long",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                    aria-pressed={date === value}
+                    className={[
+                      "reservation-date-picker-day",
+                      isCurrentMonth ? "" : "outside-month",
+                      date === value ? "selected" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    data-date={date}
+                    key={date}
+                    onClick={() => selectDate(date)}
+                    type="button"
+                  >
+                    {dateObject.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 export function ResourcesPage() {
   const { user } = useAuth();
   const [resources, setResources] = useState<Resource[]>([]);
@@ -267,6 +692,9 @@ export function ResourcesPage() {
   const [selectedDate, setSelectedDate] = useState(() =>
     toDateKey(new Date()),
   );
+  const [startDate, setStartDate] = useState(() => toDateKey(new Date()));
+  const [endDate, setEndDate] = useState(() => toDateKey(new Date()));
+  const [isFullDaySelected, setIsFullDaySelected] = useState(false);
   const [view, setView] = useState<CalendarView>("month");
   const [selectedRange, setSelectedRange] = useState<TimeRange | null>(null);
   const [draftRange, setDraftRange] = useState<TimeRange | null>(null);
@@ -282,6 +710,12 @@ export function ResourcesPage() {
   const [loadError, setError] = useState("");
   const dragRef = useRef<DragRange | null>(null);
   const ignoreClickRef = useRef(false);
+  const constraintsCacheRef = useRef(
+    new Map<number, {
+      expiresAt: number;
+      promise: Promise<AvailabilityConstraint[]>;
+    }>(),
+  );
 
   const resource = resourceId ? getResourceById(resourceId, resources) : undefined;
   const selectedDateObject = fromDateKey(selectedDate);
@@ -301,6 +735,30 @@ export function ResourcesPage() {
         : [selectedDate, selectedDate];
   const visibleDates =
     view === "day" ? [selectedDate] : view === "week" ? weekDates : [selectedDate];
+  const resourceConstraints = resource
+    ? constraintsByResource[resource.id] ?? []
+    : [];
+  const resourceConstraintsLoaded = Boolean(
+    resource && Object.prototype.hasOwnProperty.call(constraintsByResource, resource.id),
+  );
+  const multiDayAvailable = resource && resourceConstraintsLoaded
+    ? supportsMultiDayReservations(resource, resourceConstraints)
+    : false;
+  const fullDayOnly = resource && resourceConstraintsLoaded
+    ? isFullDayOnlyResource(resource, resourceConstraints)
+    : false;
+  const resourceHasAvailability = resource && resourceConstraintsLoaded
+    ? hasResourceAvailability(resource, resourceConstraints)
+    : false;
+  const effectiveEndDate = multiDayAvailable ? endDate : startDate;
+  const fullDayAvailableForRange =
+    resourceConstraintsLoaded &&
+    getDateKeysInRange(startDate, effectiveEndDate).length > 0 &&
+    getDateKeysInRange(startDate, effectiveEndDate).every((dateKey) =>
+      isFullDayAvailable(resource, dateKey, resourceConstraints),
+    );
+  const isFullDayMode =
+    fullDayOnly || (isFullDaySelected && fullDayAvailableForRange);
 
   useEffect(() => {
     if (!user) return;
@@ -323,11 +781,22 @@ export function ResourcesPage() {
         );
         if (!active) return;
         setResources(activeResources);
-        setResourceId((currentId) =>
-          activeResources.some((item) => String(item.id) === currentId)
-            ? currentId
-            : String(activeResources[0]?.id ?? ""),
-        );
+        const storedResourceId =
+          sessionStorage.getItem(SELECTED_RESOURCE_STORAGE_KEY) ?? "";
+        setResourceId((currentId) => {
+          const preferredId = currentId || storedResourceId;
+          const nextId = activeResources.some(
+            (item) => String(item.id) === preferredId,
+          )
+            ? preferredId
+            : String(activeResources[0]?.id ?? "");
+          if (nextId) {
+            sessionStorage.setItem(SELECTED_RESOURCE_STORAGE_KEY, nextId);
+          } else {
+            sessionStorage.removeItem(SELECTED_RESOURCE_STORAGE_KEY);
+          }
+          return nextId;
+        });
       } catch (resourceError) {
         if (!active) return;
         setError(
@@ -370,38 +839,58 @@ export function ResourcesPage() {
       setError("");
 
       try {
-        const [constraintsResponse, availabilityResponse] = await Promise.all([
-          fetch(apiUrl(`/resources/${selectedResource.id}/constraints/`), {
-            credentials: "include",
-          }),
-          fetch(
-            apiUrl(
-              `/resources/${selectedResource.id}/availability/?${dateQuery.toString()}`,
-            ),
-            { credentials: "include" },
-          ),
-        ]);
-
-        if (!constraintsResponse.ok) {
-          throw new Error(
-            `Could not load availability rules for ${selectedResource.name}.`,
-          );
+        const cache = constraintsCacheRef.current;
+        const cached = cache.get(selectedResource.id);
+        let constraintsPromise = cached && cached.expiresAt > Date.now()
+          ? cached.promise
+          : undefined;
+        if (!constraintsPromise) {
+          constraintsPromise = (async () => {
+            const response = await fetch(
+              apiUrl(`/resources/${selectedResource.id}/constraints/`),
+              { credentials: "include" },
+            );
+            if (!response.ok) {
+              throw new Error(
+                `Could not load availability rules for ${selectedResource.name}.`,
+              );
+            }
+            return (await response.json()) as AvailabilityConstraint[];
+          })();
+          cache.set(selectedResource.id, {
+            expiresAt: Date.now() + 60_000,
+            promise: constraintsPromise,
+          });
         }
+        const availabilityPromise = fetch(
+          apiUrl(
+            `/resources/${selectedResource.id}/availability/?${dateQuery.toString()}`,
+          ),
+          { credentials: "include" },
+        );
+        let constraints: AvailabilityConstraint[];
+        try {
+          constraints = await constraintsPromise;
+        } catch (constraintsError) {
+          if (cache.get(selectedResource.id)?.promise === constraintsPromise) {
+            cache.delete(selectedResource.id);
+          }
+          throw constraintsError;
+        }
+        const availabilityResponse = await availabilityPromise;
         if (!availabilityResponse.ok) {
           throw new Error(`Could not load reservations for ${selectedResource.name}.`);
         }
 
-        const [constraints, availability] = await Promise.all([
-          constraintsResponse.json() as Promise<AvailabilityConstraint[]>,
-          availabilityResponse.json() as Promise<{
-            bookings: Array<{
-              date: string;
-              start_time: string;
-              end_time: string;
-              status: "CONFIRMED" | "PENDING" | "CANCELLED";
-            }>;
-          }>,
-        ]);
+        const availability = (await availabilityResponse.json()) as {
+          bookings: Array<{
+            date: string;
+            start_time: string | null;
+            end_time: string | null;
+            is_full_day: boolean;
+            status: "CONFIRMED" | "PENDING" | "CANCELLED";
+          }>;
+        };
         if (!active) return;
 
         setConstraintsByResource((current) => ({
@@ -418,6 +907,7 @@ export function ResourcesPage() {
             reservation_date: booking.date,
             start_time: booking.start_time,
             end_time: booking.end_time,
+            is_full_day: booking.is_full_day,
             status: booking.status,
           })),
         );
@@ -462,28 +952,38 @@ export function ResourcesPage() {
 
   function changeDate(date: string) {
     setSelectedDate(date);
+    setStartDate(date);
+    setEndDate(date);
+    setIsFullDaySelected(false);
     clearSelection();
   }
 
   function finishDrag() {
     const drag = dragRef.current;
-    if (!drag || !resource) return;
+    if (!drag) return;
     dragRef.current = null;
+    if (!resource || availabilityLoading || !resourceConstraintsLoaded) {
+      setDraftRange(null);
+      return;
+    }
     ignoreClickRef.current = true;
 
+    const rangeStart = Math.min(drag.startMinute, drag.currentMinute);
+    const rangeEnd =
+      Math.max(drag.startMinute, drag.currentMinute) + SLOT_MINUTES;
     const range: TimeRange = {
       date: drag.date,
       resourceId: drag.resourceId,
-      start: Math.min(drag.start, drag.current),
-      end: Math.max(drag.start, drag.current) + 1,
+      start: rangeStart,
+      end: rangeEnd,
     };
     setDraftRange(null);
     setSelectedRange(range);
     setSelectionError(
       validateRange(resource, range, reservations, constraintsByResource[resource.id] ?? []),
     );
-    setStartTime(`${String(FIRST_HOUR + range.start).padStart(2, "0")}:00`);
-    setEndTime(`${String(FIRST_HOUR + range.end).padStart(2, "0")}:00`);
+    setStartTime(toTimeInputValue(range.start));
+    setEndTime(toTimeInputValue(range.end));
     setNotice("");
   }
 
@@ -494,7 +994,7 @@ export function ResourcesPage() {
       window.removeEventListener("pointerup", finishDrag);
       window.removeEventListener("pointercancel", finishDrag);
     };
-  }, [resource, reservations]);
+  }, [resource, reservations, availabilityLoading, resourceConstraintsLoaded]);
 
   function navigateCalendar(direction: -1 | 1) {
     const date = fromDateKey(selectedDate);
@@ -518,40 +1018,207 @@ export function ResourcesPage() {
 
   function changeResource(nextResourceId: string) {
     setResourceId(nextResourceId);
+    if (nextResourceId) {
+      sessionStorage.setItem(SELECTED_RESOURCE_STORAGE_KEY, nextResourceId);
+    } else {
+      sessionStorage.removeItem(SELECTED_RESOURCE_STORAGE_KEY);
+    }
+    setIsFullDaySelected(false);
     clearSelection();
   }
 
-  function getCellStatus(date: string, slotIndex: number): SlotStatus {
+  function getCellStatus(date: string, slotStartMinutes: number): SlotStatus {
     if (!resource) return "unavailable";
     return getSlotStatus(
       resource,
       date,
-      slotIndex,
+      slotStartMinutes,
       reservations,
       constraintsByResource[resource.id] ?? [],
     );
   }
 
-  function isInRange(date: string, slotIndex: number) {
-    const range = draftRange ?? selectedRange;
-    return Boolean(
-      range &&
-        range.resourceId === resourceId &&
-        range.date === date &&
-        slotIndex >= range.start &&
-        slotIndex < range.end,
-    );
+  function startDrag(date: string, minute: number) {
+    if (!resource) return;
+    if (availabilityLoading || !resourceConstraintsLoaded) {
+      setSelectionHint("Availability is updating. Please wait before selecting a time.");
+      return;
+    }
+    ignoreClickRef.current = true;
+    setNotice("");
+    setSelectionError("");
+    setSelectionHint("");
+    setSelectedDate(date);
+    setSelectedRange(null);
+
+    const slotStart = Math.floor(minute / SLOT_MINUTES) * SLOT_MINUTES;
+    const status = getCellStatus(date, slotStart);
+    if (status !== "available") {
+      dragRef.current = null;
+      setDraftRange(null);
+      setSelectionError(
+        status === "booked"
+          ? "That period is already booked."
+          : `${resource.name} is not available during that period.`,
+      );
+      return;
+    }
+
+    dragRef.current = {
+      resourceId,
+      date,
+      startMinute: slotStart,
+      currentMinute: slotStart,
+    };
+    setDraftRange({
+      resourceId,
+      date,
+      start: slotStart,
+      end: slotStart + SLOT_MINUTES,
+    });
   }
 
-  function selectRangeFromControls() {
+  function updateDrag(date: string, minute: number) {
+    const drag = dragRef.current;
+    if (!drag || !resource) return;
+    if (date !== drag.date) {
+      setSelectionHint("A reservation range must stay within one date.");
+      return;
+    }
+
+    const targetMinute = Math.floor(minute / SLOT_MINUTES) * SLOT_MINUTES;
+    let acceptedCurrent = drag.startMinute;
+    const direction = Math.sign(targetMinute - drag.startMinute);
+    let blockedStatus: SlotStatus | null = null;
+    let blockedMinute: number | null = null;
+
+    if (direction > 0) {
+      for (let candidate = drag.startMinute + SLOT_MINUTES; candidate <= targetMinute; candidate += SLOT_MINUTES) {
+        const status = getCellStatus(date, candidate);
+        if (status !== "available") {
+          blockedStatus = status;
+          blockedMinute = candidate;
+          break;
+        }
+        acceptedCurrent = candidate;
+      }
+    } else if (direction < 0) {
+      for (let candidate = drag.startMinute - SLOT_MINUTES; candidate >= targetMinute; candidate -= SLOT_MINUTES) {
+        const status = getCellStatus(date, candidate);
+        if (status !== "available") {
+          blockedStatus = status;
+          blockedMinute = candidate;
+          acceptedCurrent = candidate + SLOT_MINUTES;
+          break;
+        }
+        acceptedCurrent = candidate;
+      }
+    }
+
+    drag.currentMinute = acceptedCurrent;
+    const rangeStart = Math.min(drag.startMinute, acceptedCurrent);
+    const rangeEnd = Math.max(drag.startMinute, acceptedCurrent) + SLOT_MINUTES;
+    const range: TimeRange = {
+      resourceId: drag.resourceId,
+      date: drag.date,
+      start: rangeStart,
+      end: rangeEnd,
+    };
+    setDraftRange(range);
+    if (blockedStatus && blockedMinute !== null) {
+      const blockedTime = formatTime(blockedMinute);
+      setSelectionHint(
+        blockedStatus === "booked"
+          ? `Selection stopped before ${blockedTime}; that period is booked.`
+          : `Selection stopped before ${blockedTime}; the resource is unavailable.`,
+      );
+    } else {
+      setSelectionHint("");
+    }
+  }
+
+  function handleTimelinePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+    date: string,
+    start: number,
+    end: number,
+  ) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".timeline-event")) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+    const minute = Math.round((start + (offset / rect.height) * (end - start)) / SLOT_MINUTES) * SLOT_MINUTES;
+    startDrag(date, minute);
+  }
+
+  function handleTimelinePointerMove(
+    event: ReactPointerEvent<HTMLDivElement>,
+    date: string,
+    start: number,
+    end: number,
+  ) {
+    if (!dragRef.current) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+    const minute = Math.round((start + (offset / rect.height) * (end - start)) / SLOT_MINUTES) * SLOT_MINUTES;
+    updateDrag(date, minute);
+  }
+
+  function handleTimelineClick(date: string, event: MouseEvent<HTMLDivElement>, start: number, end: number) {
     if (!resource) return;
-    const start = Number(startTime.slice(0, 2)) - FIRST_HOUR;
-    const end = Number(endTime.slice(0, 2)) - FIRST_HOUR;
+    if (event.detail > 0 && ignoreClickRef.current) {
+      ignoreClickRef.current = false;
+      return;
+    }
+    if (event.detail > 0) return;
+    if (availabilityLoading || !resourceConstraintsLoaded) {
+      setSelectionHint("Availability is updating. Please wait before selecting a time.");
+      return;
+    }
+
+    setSelectedDate(date);
+    setNotice("");
+    setSelectionHint("");
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+    const minute = Math.floor((start + (offset / rect.height) * (end - start)) / SLOT_MINUTES) * SLOT_MINUTES;
+    const status = getCellStatus(date, minute);
+    if (status !== "available") {
+      setSelectionError(
+        status === "booked"
+          ? "That period is already booked."
+          : `${resource.name} is not available during that period.`,
+      );
+      return;
+    }
+    const range: TimeRange = {
+      date,
+      resourceId,
+      start: minute,
+      end: minute + SLOT_MINUTES,
+    };
+    setSelectedRange(range);
+    setSelectionError("");
+  }
+
+  function selectRangeFromControls(
+    startValue = startTime,
+    endValue = endTime,
+  ) {
+    if (!resource || availabilityLoading || !resourceConstraintsLoaded) return;
+    const selectedEndDate = multiDayAvailable ? endDate : startDate;
+    const isFullDay = isFullDayMode;
+    const start = isFullDay ? 0 : parseTimeToMinutes(startValue);
+    const end = isFullDay ? 24 * 60 : parseTimeToMinutes(endValue);
     const range: TimeRange = {
       date: selectedDate,
+      startDate,
+      endDate: selectedEndDate,
       resourceId,
       start,
       end,
+      isFullDay,
     };
     setSelectedRange(range);
     setDraftRange(null);
@@ -563,11 +1230,20 @@ export function ResourcesPage() {
   }
 
   async function reserveSelectedRange() {
-    if (!selectedRange || selectionError || !resource || isReserving) return;
+    if (
+      !selectedRange ||
+      selectionError ||
+      !resource ||
+      !resourceConstraintsLoaded ||
+      availabilityLoading ||
+      isReserving
+    ) return;
 
     setIsReserving(true);
     try {
       const csrfToken = await requireCsrfToken();
+      const selectedStartDate = selectedRange.startDate ?? selectedRange.date;
+      const selectedEndDate = selectedRange.endDate ?? selectedRange.date;
       const response = await fetch(apiUrl("/reservations/"), {
         method: "POST",
         credentials: "include",
@@ -577,9 +1253,15 @@ export function ResourcesPage() {
         },
         body: JSON.stringify({
           resource: Number(resource.id),
-          reservation_date: selectedRange.date,
-          start_time: `${String(FIRST_HOUR + selectedRange.start).padStart(2, "0")}:00`,
-          end_time: `${String(FIRST_HOUR + selectedRange.end).padStart(2, "0")}:00`,
+          reservation_date: selectedStartDate,
+          end_date: selectedEndDate,
+          start_time: selectedRange.isFullDay
+            ? null
+            : toTimeInputValue(selectedRange.start),
+          end_time: selectedRange.isFullDay
+            ? null
+            : toTimeInputValue(selectedRange.end),
+          is_full_day: Boolean(selectedRange.isFullDay),
           notes: "Created from the resources calendar.",
         }),
       });
@@ -603,16 +1285,29 @@ export function ResourcesPage() {
       }
 
       setAvailabilityRevision((current) => current + 1);
-      setNotice(
-        `${resource.name} is reserved for ${formatDate(selectedRange.date, {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })}, ${formatHourRange(
-          FIRST_HOUR + selectedRange.start,
-          FIRST_HOUR + selectedRange.end,
-        )} (${payload.status?.toLowerCase() ?? "confirmed"}).`,
-      );
+      const reservationStartDate = selectedRange.startDate ?? selectedRange.date;
+      const reservationEndDate = selectedRange.endDate ?? selectedRange.date;
+      const reservationDateLabel =
+        reservationStartDate === reservationEndDate
+          ? formatDate(reservationStartDate, {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })
+          : `${formatDate(reservationStartDate, {
+              month: "short",
+              day: "numeric",
+            })} – ${formatDate(reservationEndDate, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}`;
+      setNotice(selectedRange.isFullDay
+        ? `${resource.name} is reserved all day for ${reservationDateLabel}.`
+        : `${resource.name} is reserved for ${reservationDateLabel}, ${formatTimeRange(
+            selectedRange.start,
+            selectedRange.end,
+          )}.`);
       setSelectedRange(null);
       setDraftRange(null);
       setSelectionError("");
@@ -627,229 +1322,232 @@ export function ResourcesPage() {
     }
   }
 
-  function startDrag(date: string, slotIndex: number) {
-    if (!resource) return;
-    ignoreClickRef.current = true;
-    setNotice("");
-    setSelectionError("");
-    setSelectionHint("");
-    setSelectedDate(date);
-    setSelectedRange(null);
-    const status = getCellStatus(date, slotIndex);
-    if (status !== "available") {
-      dragRef.current = null;
-      setDraftRange(null);
-      setSelectionError(
-        status === "booked"
-          ? "That period is already booked."
-          : `${resource.name} is not available during that period.`,
-      );
-      return;
-    }
-
-    dragRef.current = {
-      resourceId,
-      date,
-      start: slotIndex,
-      current: slotIndex,
-      end: slotIndex + 1,
-    };
-    setDraftRange({
-      resourceId,
-      date,
-      start: slotIndex,
-      end: slotIndex + 1,
-    });
-  }
-
-  function updateDrag(date: string, slotIndex: number) {
-    const drag = dragRef.current;
-    if (!drag || !resource) return;
-    if (date !== drag.date) {
-      setSelectionHint("A reservation range must stay within one date.");
-      return;
-    }
-
-    let acceptedCurrent = drag.start;
-    const direction = Math.sign(slotIndex - drag.start);
-    let blockedStatus: SlotStatus | null = null;
-    let blockedIndex: number | null = null;
-
-    if (direction > 0) {
-      for (
-        let candidate = drag.start + direction;
-        candidate <= slotIndex;
-        candidate += 1
-      ) {
-        const status = getCellStatus(date, candidate);
-        if (status !== "available") {
-          blockedStatus = status;
-          blockedIndex = candidate;
-          break;
-        }
-        acceptedCurrent = candidate;
-      }
-    } else if (direction < 0) {
-      for (
-        let candidate = drag.start - 1;
-        candidate >= slotIndex;
-        candidate -= 1
-      ) {
-        const status = getCellStatus(date, candidate);
-        if (status !== "available") {
-          blockedStatus = status;
-          blockedIndex = candidate;
-          acceptedCurrent = candidate + 1;
-          break;
-        }
-        acceptedCurrent = candidate;
-      }
-    }
-
-    drag.current = acceptedCurrent;
-    const rangeStart = Math.min(drag.start, acceptedCurrent);
-    const rangeEnd = Math.max(drag.start, acceptedCurrent) + 1;
-    const range: TimeRange = {
-      resourceId: drag.resourceId,
-      date: drag.date,
-      start: rangeStart,
-      end: rangeEnd,
-    };
-    setDraftRange(range);
-    if (blockedStatus && blockedIndex !== null) {
-      const blockedTime = formatHour(FIRST_HOUR + blockedIndex);
-      setSelectionHint(
-        blockedStatus === "booked"
-          ? `Selection stopped before ${blockedTime}; that period is booked.`
-          : `Selection stopped before ${blockedTime}; the resource is unavailable.`,
-      );
-    } else {
-      setSelectionHint("");
-    }
-  }
-
-  function handleSlotClick(date: string, slotIndex: number, detail: number) {
-    if (!resource) return;
-    if (detail > 0 && ignoreClickRef.current) {
-      ignoreClickRef.current = false;
-      return;
-    }
-    if (detail > 0) return;
-
-    setSelectedDate(date);
-    setNotice("");
-    setSelectionHint("");
-    const status = getCellStatus(date, slotIndex);
-    if (status !== "available") {
-      setSelectionError(
-        status === "booked"
-          ? "That period is already booked."
-          : `${resource.name} is not available during that period.`,
-      );
-      return;
-    }
-    const range: TimeRange = {
-      date,
-      resourceId,
-      start: slotIndex,
-      end: slotIndex + 1,
-    };
-    setSelectedRange(range);
-    setSelectionError("");
-    setStartTime(`${String(FIRST_HOUR + slotIndex).padStart(2, "0")}:00`);
-    setEndTime(`${String(FIRST_HOUR + slotIndex + 1).padStart(2, "0")}:00`);
-  }
-
   function renderTimeGrid(dates: string[]) {
+    const resourceConstraints = resource
+      ? constraintsByResource[resource.id] ?? []
+      : [];
+    const defaultWindow = normalizeBackendAvailabilityWindow(resource);
+    const visibleWindows = dates.flatMap((date) =>
+      getAvailabilityWindows(resource, date, resourceConstraints),
+    );
+    const timelineStart = visibleWindows.length
+      ? Math.floor(Math.min(...visibleWindows.map((window) => window.start)) / 60) * 60
+      : Math.floor(defaultWindow.startTime / 60) * 60;
+    const timelineEnd = visibleWindows.length
+      ? Math.ceil(Math.max(...visibleWindows.map((window) => window.end)) / 60) * 60
+      : Math.ceil(defaultWindow.endTime / 60) * 60;
+    const timelineMinutes = Math.max(60, timelineEnd - timelineStart);
+    const timelineHeight = (timelineMinutes / 60) * HOUR_HEIGHT_PX;
+    const hourLabels = Array.from(
+      { length: Math.floor(timelineMinutes / 60) + 1 },
+      (_, index) => timelineStart + index * 60,
+    );
+    const pointForMinute = (minute: number) =>
+      ((minute - timelineStart) / timelineMinutes) * timelineHeight;
+    const range = draftRange ?? selectedRange;
+
     return (
       <div
         className="calendar-grid-scroll"
         role="region"
-        aria-label={dates.length === 1 ? "Day calendar time slots" : "Week calendar time slots"}
+        aria-label={dates.length === 1 ? "Day calendar timeline" : "Week calendar timeline"}
         tabIndex={0}
+        aria-busy={availabilityLoading}
       >
         <div
           className={`calendar-time-grid ${dates.length === 1 ? "calendar-time-grid-day" : "calendar-time-grid-week"}`}
           style={{ "--calendar-day-count": dates.length } as CSSProperties}
         >
-        <div className="time-grid-header time-grid-time-label">TIME</div>
-        {dates.map((date) => (
-          <button
-            className={`time-grid-header time-grid-day-header ${date === selectedDate ? "current" : ""}`}
-            key={date}
-            type="button"
-            onClick={() => {
-              changeDate(date);
-              setView("day");
-            }}
-          >
-            <span>{formatDate(date, { weekday: "short" })}</span>
-            <strong>{formatDate(date, { day: "numeric" })}</strong>
-          </button>
-        ))}
-
-        {SLOT_STARTS.map((hour) => {
-          const slotIndex = hour - FIRST_HOUR;
-          return (
-            <div className="time-grid-row" key={hour}>
-              <div className="time-grid-hour">{formatHour(hour)}</div>
-              {dates.map((date) => {
-                const status = getCellStatus(date, slotIndex);
-                const inRange = isInRange(date, slotIndex);
-                const error =
-                  (draftRange ?? selectedRange) &&
-                  selectionError &&
-                  inRange;
-                return (
-                  <button
-                    aria-label={`${formatDate(date, { weekday: "long", month: "long", day: "numeric" })}, ${formatHourRange(hour, hour + 1)}, ${status}${inRange ? ", selected range" : ""}`}
-                    aria-disabled={status !== "available"}
-                    aria-pressed={inRange}
-                    className={[
-                      "calendar-slot",
-                      `calendar-slot-${status}`,
-                      inRange ? "calendar-slot-selected" : "",
-                      error ? "calendar-slot-invalid" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    key={date}
-                    type="button"
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) return;
-                      event.preventDefault();
-                      startDrag(date, slotIndex);
-                    }}
-                    onPointerMove={() => updateDrag(date, slotIndex)}
-                    onPointerEnter={() => updateDrag(date, slotIndex)}
-                    onClick={(event) =>
-                      handleSlotClick(date, slotIndex, event.detail)
-                    }
-                  >
-                    {status === "booked" && (
-                      <span className="calendar-slot-label">Booked</span>
-                    )}
-                    {status === "unavailable" && (
-                      <span className="calendar-slot-label">Unavailable</span>
-                    )}
-                    {inRange && !error && (
-                      <span className="calendar-slot-label">Selected</span>
-                    )}
-                    {inRange && error && (
-                      <span className="calendar-slot-label">Unavailable</span>
-                    )}
-                  </button>
-                );
-              })}
+          <div className="time-grid-header time-grid-time-label">TIME</div>
+          {dates.map((date) => (
+            <button
+                className={[
+                  "time-grid-header",
+                  "time-grid-day-header",
+                  date === selectedDate ? "current" : "",
+                  resourceConstraintsLoaded &&
+                  getAvailabilityWindows(resource, date, resourceConstraints).length === 0
+                    ? "unavailable-day"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              key={date}
+              type="button"
+              onClick={() => {
+                changeDate(date);
+              }}
+            >
+              <span>{formatDate(date, { weekday: "short" })}</span>
+              <strong>{formatDate(date, { day: "numeric" })}</strong>
+            </button>
+          ))}
+          <div className="time-grid-body" style={{ height: timelineHeight }}>
+            <div className="time-grid-axis" aria-hidden="true">
+              {hourLabels.map((minute) => (
+                <span
+                  className="time-grid-hour-label"
+                  key={minute}
+                  style={{ top: pointForMinute(minute) }}
+                >
+                  {formatTime(minute)}
+                </span>
+              ))}
             </div>
-          );
-        })}
+            {dates.map((date) => {
+              const windows = getAvailabilityWindows(resource, date, resourceConstraints);
+              const unavailableWindows: Array<{ start: number; end: number }> = [];
+              let availableUntil = timelineStart;
+              for (const window of windows) {
+                if (window.start > availableUntil) {
+                  unavailableWindows.push({
+                    start: availableUntil,
+                    end: window.start,
+                  });
+                }
+                availableUntil = Math.max(availableUntil, window.end);
+              }
+              if (availableUntil < timelineEnd) {
+                unavailableWindows.push({
+                  start: availableUntil,
+                  end: timelineEnd,
+                });
+              }
+              if (windows.length === 0) {
+                unavailableWindows.push({
+                  start: timelineStart,
+                  end: timelineEnd,
+                });
+              }
+              const dateReservations = reservations.filter(
+                (reservation) =>
+                  reservation.resource === resource?.id &&
+                  reservation.reservation_date === date &&
+                  reservation.status !== "CANCELLED",
+              );
+              const dayRange =
+                range?.resourceId === resourceId && range.date === date
+                  ? range
+                  : null;
+              const isInvalid =
+                Boolean(dayRange) && Boolean(selectionError);
+
+              return (
+                <div
+                  aria-label={`${formatDate(date, {
+                    weekday: "long",
+                    month: "long",
+                    day: "numeric",
+                  })} schedule. Drag to select a time; time fields below are also available.`}
+                  className={`timeline-day ${date === selectedDate ? "current" : ""}`}
+                  data-date={date}
+                  key={date}
+                  role="group"
+                  style={{ height: timelineHeight }}
+                  onPointerDown={(event) =>
+                    handleTimelinePointerDown(event, date, timelineStart, timelineEnd)
+                  }
+                  onPointerMove={(event) =>
+                    handleTimelinePointerMove(event, date, timelineStart, timelineEnd)
+                  }
+                  onPointerUp={() => finishDrag()}
+                  onPointerCancel={() => finishDrag()}
+                  onClick={(event) =>
+                    handleTimelineClick(date, event, timelineStart, timelineEnd)
+                  }
+                >
+                  {unavailableWindows
+                    .filter(
+                      (window) =>
+                        window.end > window.start &&
+                        window.start < timelineEnd &&
+                        window.end > timelineStart,
+                    )
+                    .map((window, index) => (
+                      <div
+                        aria-hidden="true"
+                        className="timeline-unavailable"
+                        key={`closed-${index}`}
+                        style={{
+                          top: pointForMinute(Math.max(window.start, timelineStart)),
+                          height:
+                            pointForMinute(Math.min(window.end, timelineEnd)) -
+                            pointForMinute(Math.max(window.start, timelineStart)),
+                        }}
+                      />
+                    ))}
+                  {dateReservations.map((reservation) => {
+                      const start = reservation.is_full_day
+                        ? 0
+                        : parseTimeToMinutes(reservation.start_time);
+                      const end = reservation.is_full_day
+                        ? 24 * 60
+                        : parseTimeToMinutes(reservation.end_time);
+                      const timeLabel = reservation.is_full_day
+                        ? "All day"
+                        : formatTimeRange(start, end);
+                      return (
+                        <div
+                          aria-label={`${reservation.resource_name}, ${timeLabel}, ${reservation.status.toLowerCase()}`}
+                        className={`timeline-event timeline-event-${reservation.status.toLowerCase()}`}
+                        key={reservation.id || `${date}-${start}-${end}`}
+                        role="img"
+                        style={{
+                          top: pointForMinute(start),
+                          height: pointForMinute(end) - pointForMinute(start),
+                        }}
+                      >
+                        <strong>{reservation.resource_name}</strong>
+                        <span>{timeLabel}</span>
+                      </div>
+                    );
+                  })}
+                  {dayRange && (
+                    <div
+                      aria-label={`Selected ${formatTimeRange(dayRange.start, dayRange.end)}`}
+                      className={`timeline-selection ${isInvalid ? "invalid" : ""}`}
+                      style={{
+                        top: pointForMinute(dayRange.start),
+                        height:
+                          pointForMinute(dayRange.end) -
+                          pointForMinute(dayRange.start),
+                      }}
+                    >
+                      <span>{formatTimeRange(dayRange.start, dayRange.end)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     );
   }
 
   const rangeForSummary = draftRange ?? selectedRange;
+  const startDateAvailabilityWindows = getAvailabilityWindows(
+    resource,
+    startDate,
+    resource ? constraintsByResource[resource.id] ?? [] : [],
+  );
+  const endDateAvailabilityWindows = getAvailabilityWindows(
+    resource,
+    effectiveEndDate,
+    resource ? constraintsByResource[resource.id] ?? [] : [],
+  );
+  const startTimeOptions = getTimeOptions(startDateAvailabilityWindows, false);
+  const startTimeValue = startTimeOptions.includes(startTime)
+    ? startTime
+    : startTimeOptions[0] ?? "";
+  const endTimeOptions = getEndTimeOptions(
+    endDateAvailabilityWindows,
+    startTimeValue,
+    startDate === effectiveEndDate,
+  );
+  const endTimeValue = endTimeOptions.includes(endTime)
+    ? endTime
+    : endTimeOptions[0] ?? "";
   const rangeValidation = rangeForSummary
     ? validateRange(
         resource,
@@ -869,7 +1567,6 @@ export function ResourcesPage() {
     <div className="content-stack reservation-calendar-page">
       <PageHeading
         title="Make a reservation"
-        description="Browse resource availability and select a continuous time range."
       />
 
       <section className="panel calendar-panel">
@@ -883,6 +1580,7 @@ export function ResourcesPage() {
           <label className="form-control calendar-resource-select">
             <span>Resource</span>
             <select
+              className="reservation-resource-picker"
               value={resourceId}
               onChange={(event) => changeResource(event.target.value)}
               disabled={resources.length === 0}
@@ -900,7 +1598,13 @@ export function ResourcesPage() {
               <button
                 className="icon-button"
                 type="button"
-                aria-label="Previous"
+                aria-label={
+                  view === "month"
+                    ? "Previous month"
+                    : view === "week"
+                      ? "Previous week"
+                      : "Previous day"
+                }
                 onClick={() => navigateCalendar(-1)}
               >
                 ‹
@@ -908,7 +1612,13 @@ export function ResourcesPage() {
               <button
                 className="icon-button"
                 type="button"
-                aria-label="Next"
+                aria-label={
+                  view === "month"
+                    ? "Next month"
+                    : view === "week"
+                      ? "Next week"
+                      : "Next day"
+                }
                 onClick={() => navigateCalendar(1)}
               >
                 ›
@@ -953,18 +1663,28 @@ export function ResourcesPage() {
           </div>
         </div>
 
-        {isLoading || availabilityLoading ? (
+        {isLoading ? (
           <div className="inline-notice" role="status">
-            {isLoading
-              ? "Loading resources…"
-              : `Loading availability for ${resource?.name ?? "the selected resource"}…`}
+            Loading resources…
           </div>
         ) : resources.length === 0 ? (
           <div className="inline-notice inline-notice-error" role="alert">
             No active resources are currently available.
           </div>
-        ) : view === "month" ? (
-          <div className="month-calendar" aria-label={`${monthTitle} availability`}>
+        ) : null}
+        {availabilityLoading && !isLoading && resources.length > 0 && (
+          <p className="calendar-loading-status" role="status">
+            Updating availability…
+          </p>
+        )}
+        {!isLoading && resources.length > 0 && view === "month" ? (
+          <div
+            className="month-calendar"
+            role="region"
+            aria-label={`${monthTitle} availability`}
+            tabIndex={0}
+            aria-busy={availabilityLoading}
+          >
             <div className="month-weekday-row">
               {WEEKDAYS.map((day) => (
                 <span key={day}>{day}</span>
@@ -975,6 +1695,12 @@ export function ResourcesPage() {
                 const dateObject = fromDateKey(date);
                 const inCurrentMonth =
                   dateObject.getMonth() === selectedDateObject.getMonth();
+                const dateHasAvailability =
+                  getAvailabilityWindows(
+                    resource,
+                    date,
+                    resource ? constraintsByResource[resource.id] ?? [] : [],
+                  ).length > 0;
                 const availability = getDateAvailability(
                   resource,
                   date,
@@ -989,6 +1715,9 @@ export function ResourcesPage() {
                       "month-date-cell",
                       inCurrentMonth ? "" : "outside-month",
                       date === selectedDate ? "selected-date" : "",
+                      resourceConstraintsLoaded && !dateHasAvailability
+                        ? "unavailable-day"
+                        : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
@@ -996,7 +1725,6 @@ export function ResourcesPage() {
                     type="button"
                     onClick={() => {
                       changeDate(date);
-                      setView("day");
                     }}
                   >
                     <span className="month-date-number">
@@ -1004,22 +1732,15 @@ export function ResourcesPage() {
                     </span>
                     <span className={`date-availability date-${availability}`}>
                       <i aria-hidden="true" />
-                      {availability === "available"
-                        ? "Available"
-                        : availability === "partially-available"
-                          ? "Partially available"
-                        : availability === "fully-booked"
-                          ? "Fully booked"
-                          : "Unavailable"}
                     </span>
                   </button>
                 );
               })}
             </div>
           </div>
-        ) : (
+        ) : !isLoading && resources.length > 0 ? (
           renderTimeGrid(visibleDates)
-        )}
+        ) : null}
 
         <div className="calendar-legend" aria-label="Availability legend">
           <span><i className="legend-dot legend-available" />Available</span>
@@ -1047,65 +1768,134 @@ export function ResourcesPage() {
         </div>
         {view === "month" && renderTimeGrid([selectedDate])}
         <div className="range-selection-tools">
-          <div className="range-helper">
-            <strong>Select a continuous time range</strong>
-            <span>Drag across available periods, or choose start and end times.</span>
-          </div>
-          <div className="range-controls">
-            <label className="form-control">
-              <span>Start time</span>
-              <select
-                value={startTime}
-                onChange={(event) => setStartTime(event.target.value)}
+          {resourceConstraintsLoaded && resourceHasAvailability ? (
+            <div className="range-controls">
+              <div className="form-control">
+                <span>{multiDayAvailable ? "Reserve From" : "Reserve date"}</span>
+                <ReservationDatePicker
+                  label={multiDayAvailable ? "Reserve From" : "Reserve date"}
+                  value={startDate}
+                  onChange={(date) => {
+                    setSelectedDate(date);
+                    setStartDate(date);
+                    if (!multiDayAvailable) setEndDate(date);
+                    setIsFullDaySelected(false);
+                    setSelectedRange(null);
+                    setSelectionError("");
+                    setSelectionHint("");
+                  }}
+                />
+              </div>
+              {multiDayAvailable && (
+                <div className="form-control">
+                  <span>Reserve Until</span>
+                  <ReservationDatePicker
+                    label="Reserve Until"
+                    value={endDate}
+                    onChange={(date) => {
+                      setEndDate(date);
+                      setIsFullDaySelected(false);
+                      setSelectedRange(null);
+                      setSelectionError("");
+                      setSelectionHint("");
+                    }}
+                  />
+                </div>
+              )}
+              {!isFullDayMode && (
+                <>
+                  <label className="form-control">
+                    <span>Start Time</span>
+                    <select
+                      required
+                      value={startTimeValue}
+                      disabled={startTimeOptions.length === 0}
+                      onChange={(event) => {
+                        setStartTime(event.target.value);
+                        setSelectedRange(null);
+                        setSelectionError("");
+                        setSelectionHint("");
+                      }}
+                    >
+                      {startTimeOptions.length === 0 ? (
+                        <option value="">No available times</option>
+                      ) : (
+                        startTimeOptions.map((time) => (
+                          <option key={time} value={time}>
+                            {formatTime(parseTimeToMinutes(time))}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+                  <label className="form-control">
+                    <span>End Time</span>
+                    <select
+                      required
+                      value={endTimeValue}
+                      disabled={endTimeOptions.length === 0}
+                      onChange={(event) => {
+                        setEndTime(event.target.value);
+                        setSelectedRange(null);
+                        setSelectionError("");
+                        setSelectionHint("");
+                      }}
+                    >
+                      {endTimeOptions.length === 0 ? (
+                        <option value="">No available end times</option>
+                      ) : (
+                        endTimeOptions.map((time) => (
+                          <option key={time} value={time}>
+                            {formatTime(parseTimeToMinutes(time))}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+                </>
+              )}
+              {!fullDayOnly && fullDayAvailableForRange && (
+                <label className="full-day-toggle">
+                  <input
+                    checked={isFullDaySelected}
+                    type="checkbox"
+                    onChange={(event) => {
+                      setIsFullDaySelected(event.target.checked);
+                      setSelectedRange(null);
+                      setSelectionError("");
+                      setSelectionHint("");
+                    }}
+                  />
+                  <span>Reserve all day</span>
+                </label>
+              )}
+              <button
+                className="button button-secondary apply-range-button"
+                type="button"
+                disabled={
+                  availabilityLoading ||
+                  (!isFullDayMode &&
+                    (startTimeOptions.length === 0 || endTimeOptions.length === 0))
+                }
+                onClick={() => selectRangeFromControls(startTimeValue, endTimeValue)}
               >
-                {TIME_BOUNDARIES.slice(0, -1).map((hour) => {
-                  const value = `${String(hour).padStart(2, "0")}:00`;
-                  return (
-                    <option key={value} value={value}>
-                      {formatHour(hour)}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <label className="form-control">
-              <span>End time</span>
-              <select
-                value={endTime}
-                onChange={(event) => setEndTime(event.target.value)}
-              >
-                {TIME_BOUNDARIES.slice(1).map((hour) => {
-                  const value = `${String(hour).padStart(2, "0")}:00`;
-                  return (
-                    <option key={value} value={value}>
-                      {formatHour(hour)}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <button
-              className="button button-secondary apply-range-button"
-              type="button"
-              onClick={selectRangeFromControls}
-            >
-              Apply range
-            </button>
-          </div>
+                Apply range
+              </button>
+            </div>
+          ) : resourceConstraintsLoaded ? (
+            <p className="range-controls-loading" role="status">
+              No availability is configured for this resource.
+            </p>
+          ) : (
+            <p className="range-controls-loading" role="status">
+              Loading availability rules…
+            </p>
+          )}
         </div>
-
         <div className="reservation-summary">
           <div className="reservation-summary-details">
             <div className="reservation-summary-title">
               <span className="summary-label">Reservation Summary</span>
-              {rangeForSummary && (
-                <strong>
-                  {formatHourRange(
-                    FIRST_HOUR + rangeForSummary.start,
-                    FIRST_HOUR + rangeForSummary.end,
-                  )}
-                </strong>
-              )}
             </div>
             {rangeForSummary ? (
               <dl className="reservation-summary-fields">
@@ -1114,37 +1904,64 @@ export function ResourcesPage() {
                   <dd>{resource?.name ?? "Resource"}</dd>
                 </div>
                 <div>
-                  <dt>Date</dt>
+                  <dt>
+                    {(rangeForSummary.startDate ?? rangeForSummary.date) ===
+                    (rangeForSummary.endDate ?? rangeForSummary.date)
+                      ? "Date"
+                      : "Dates"}
+                  </dt>
                   <dd>
-                    {formatDate(rangeForSummary.date, {
-                      weekday: "long",
-                      month: "long",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
+                    {(rangeForSummary.startDate ?? rangeForSummary.date) ===
+                    (rangeForSummary.endDate ?? rangeForSummary.date)
+                      ? formatDate(
+                          rangeForSummary.startDate ?? rangeForSummary.date,
+                          {
+                            weekday: "long",
+                            month: "long",
+                            day: "numeric",
+                            year: "numeric",
+                          },
+                        )
+                      : `${formatDate(
+                          rangeForSummary.startDate ?? rangeForSummary.date,
+                          { month: "short", day: "numeric" },
+                        )} – ${formatDate(
+                          rangeForSummary.endDate ?? rangeForSummary.date,
+                          { month: "short", day: "numeric", year: "numeric" },
+                        )}`}
                   </dd>
                 </div>
                 <div>
-                  <dt>Start</dt>
-                  <dd>{formatHour(FIRST_HOUR + rangeForSummary.start)}</dd>
-                </div>
-                <div>
-                  <dt>End</dt>
-                  <dd>{formatHour(FIRST_HOUR + rangeForSummary.end)}</dd>
+                  <dt>{rangeForSummary.isFullDay ? "Availability" : "Time"}</dt>
+                  <dd>
+                    {rangeForSummary.isFullDay
+                      ? "Full day"
+                      : formatTimeRange(rangeForSummary.start, rangeForSummary.end)}
+                  </dd>
                 </div>
                 <div>
                   <dt>Duration</dt>
                   <dd>
-                    {rangeForSummary.end - rangeForSummary.start}{" "}
-                    {rangeForSummary.end - rangeForSummary.start === 1
-                      ? "hour"
-                      : "hours"}
+                    {rangeForSummary.isFullDay
+                      ? `${getDateKeysInRange(
+                          rangeForSummary.startDate ?? rangeForSummary.date,
+                          rangeForSummary.endDate ?? rangeForSummary.date,
+                        ).length * 24} hours`
+                      : formatDuration(
+                          (getDateKeysInRange(
+                            rangeForSummary.startDate ?? rangeForSummary.date,
+                            rangeForSummary.endDate ?? rangeForSummary.date,
+                          ).length -
+                            1) *
+                            24 *
+                            60 +
+                            rangeForSummary.end -
+                            rangeForSummary.start,
+                        )}
                   </dd>
                 </div>
               </dl>
-            ) : (
-              <small>Select an available period on the calendar.</small>
-            )}
+            ) : null}
           </div>
           <div className="summary-actions">
             {rangeForSummary && (
@@ -1159,7 +1976,13 @@ export function ResourcesPage() {
             <button
               className="button button-primary"
               type="button"
-              disabled={!selectedRange || Boolean(rangeValidation) || isReserving}
+              disabled={
+                !selectedRange ||
+                Boolean(rangeValidation) ||
+                availabilityLoading ||
+                !resourceConstraintsLoaded ||
+                isReserving
+              }
               onClick={reserveSelectedRange}
             >
               {isReserving ? "Reserving…" : "Reserve"}

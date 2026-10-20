@@ -58,6 +58,7 @@ class ResourceAvailabilityConstraint(models.Model):
     day_of_week = models.IntegerField()
     start_time = models.TimeField()
     end_time = models.TimeField()
+    is_full_day = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     notes = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -83,8 +84,10 @@ class Reservation(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="reservations")
     resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name="reservations")
     reservation_date = models.DateField()
-    start_time = models.TimeField()
-    end_time = models.TimeField()
+    end_date = models.DateField(null=True, blank=True, default=None)
+    start_time = models.TimeField(null=True, blank=True, default=None)
+    end_time = models.TimeField(null=True, blank=True, default=None)
+    is_full_day = models.BooleanField(default=False)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_CONFIRMED)
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -94,4 +97,5 @@ class Reservation(models.Model):
         ordering = ["reservation_date", "start_time"]
 
     def __str__(self):
-        return f"{self.user.email} -> {self.resource.name} ({self.reservation_date})"
+        end_label = self.end_date or self.reservation_date
+        return f"{self.user.email} -> {self.resource.name} ({self.reservation_date} to {end_label})"

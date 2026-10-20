@@ -20,6 +20,7 @@ type Constraint = {
   day_of_week: number;
   start_time: string;
   end_time: string;
+  is_full_day: boolean;
   is_active: boolean;
   notes: string;
 };
@@ -28,6 +29,7 @@ type AvailabilityRow = {
   startTime: string;
   endTime: string;
   active: boolean;
+  fullDay: boolean;
 };
 
 type ResourceFormData = {
@@ -74,6 +76,14 @@ function toFormData(
           : resource
             ? true
             : day >= 1 && day <= 5,
+      fullDay: savedConstraint
+        ? Boolean(activeConstraint?.is_full_day)
+        : Boolean(
+              !hasConfiguredConstraints &&
+              resource &&
+              resource.default_start_time.slice(0, 5) === "00:00" &&
+              resource.default_end_time.slice(0, 5) === "23:59",
+            ),
     };
     if (!configuredDays.has(backendDay) && !hasConfiguredConstraints && !resource) {
       availability[day].active = day >= 1 && day <= 5;
@@ -96,6 +106,9 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
   const [loading, setLoading] = useState(editing);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [bulkStartTime, setBulkStartTime] = useState("09:00");
+  const [bulkEndTime, setBulkEndTime] = useState("17:00");
 
   useEffect(() => {
     let active = true;
@@ -127,6 +140,57 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
     };
   }, [editing, resourceId]);
 
+  function updateAvailability<Field extends keyof AvailabilityRow>(
+    day: number,
+    field: Field,
+    value: AvailabilityRow[Field],
+  ) {
+    setFormData((current) => ({
+      ...current,
+      availability: {
+        ...current.availability,
+        [day]: {
+          ...current.availability[day],
+          [field]: value,
+        },
+      },
+    }));
+  }
+
+  function toggleSelectedDay(day: number) {
+    setSelectedDays((current) =>
+      current.includes(day)
+        ? current.filter((selectedDay) => selectedDay !== day)
+        : [...current, day],
+    );
+  }
+
+  function applyRangeToSelectedDays() {
+    if (!selectedDays.length) return;
+    if (
+      !bulkStartTime ||
+      !bulkEndTime ||
+      parseTime(bulkStartTime) >= parseTime(bulkEndTime)
+    ) {
+      setError("Choose an end time after the start time.");
+      return;
+    }
+
+    setError("");
+    setFormData((current) => ({
+      ...current,
+      availability: {
+        ...current.availability,
+        ...Object.fromEntries(
+          selectedDays.map((day) => [
+            day,
+            { startTime: bulkStartTime, endTime: bulkEndTime, active: true, fullDay: false },
+          ]),
+        ),
+      },
+    }));
+  }
+
   async function saveAvailability(
     resourceIdToSave: number,
     constraints: Constraint[],
@@ -149,6 +213,7 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
         day_of_week: backendDay,
         start_time: value.startTime,
         end_time: value.endTime,
+        is_full_day: value.fullDay,
         is_active: value.active,
       };
       const existing = constraints.find((constraint) => constraint.day_of_week === backendDay);
@@ -177,14 +242,15 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
 
     for (const { day, label } of weekdays) {
       const key = label.toLowerCase();
-      const startTime = String(data.get(`${key}Start`) ?? "");
-      const endTime = String(data.get(`${key}End`) ?? "");
       const active = data.get(`${key}Available`) === "on";
-      if (active && (!startTime || !endTime || parseTime(startTime) >= parseTime(endTime))) {
+      const fullDay = data.get(`${key}FullDay`) === "on";
+      const startTime = fullDay ? "00:00" : String(data.get(`${key}Start`) ?? "");
+      const endTime = fullDay ? "23:59" : String(data.get(`${key}End`) ?? "");
+      if (active && !fullDay && (!startTime || !endTime || parseTime(startTime) >= parseTime(endTime))) {
         setError(`${label} availability must end after it starts.`);
         return;
       }
-      availability[day] = { startTime, endTime, active };
+      availability[day] = { startTime, endTime, active, fullDay };
     }
 
     const name = String(data.get("name") ?? "").trim();
@@ -246,16 +312,26 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
 
   const resource = formData.resource;
   const isReady = !loading && (!editing || Boolean(resource));
+  const selectedAvailabilitySummary = selectedDays
+    .map((day) => {
+      const weekday = weekdays.find((item) => item.day === day);
+      const availability = formData.availability[day];
+      if (!weekday || !availability) return null;
+      return `${weekday.label.slice(0, 3)} ${
+        availability.active
+          ? availability.fullDay
+            ? "All day"
+            : `${availability.startTime}–${availability.endTime}`
+          : "Off"
+      }`;
+    })
+    .filter((value): value is string => value !== null)
+    .join(" · ");
 
   return (
     <div className="content-stack">
       <PageHeading
         title={editing ? "Edit Resource" : "Add Resource"}
-        description={
-          editing
-            ? "Update the resource details and availability."
-            : "Add a resource that employees can reserve."
-        }
       />
       {error && (
         <div className="inline-notice inline-notice-error" role="alert">
@@ -305,9 +381,59 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
             </label>
             <fieldset className="form-control form-grid-full availability-days">
               <legend>Weekly availability</legend>
-              <p className="availability-description">
-                Set an availability window for each day. Clear the checkbox for days when this resource cannot be reserved.
-              </p>
+              <fieldset className="availability-bulk-editor">
+                <legend>Apply hours to days</legend>
+                <div className="weekday-options">
+                  {weekdays.map(({ day, label }) => (
+                    <label
+                      className={
+                        selectedDays.includes(day)
+                          ? "weekday-option selected"
+                          : "weekday-option"
+                      }
+                      key={day}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDays.includes(day)}
+                        onChange={() => toggleSelectedDay(day)}
+                      />
+                      <span title={label}>{label.slice(0, 3)}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="bulk-availability-controls">
+                  <label className="form-control">
+                    <span>From</span>
+                    <input
+                      type="time"
+                      value={bulkStartTime}
+                      onChange={(event) => setBulkStartTime(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-control">
+                    <span>Until</span>
+                    <input
+                      type="time"
+                      value={bulkEndTime}
+                      onChange={(event) => setBulkEndTime(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={!selectedDays.length}
+                    onClick={applyRangeToSelectedDays}
+                  >
+                    Apply range
+                  </button>
+                </div>
+                {selectedAvailabilitySummary && (
+                  <p className="availability-review" aria-live="polite">
+                    Selected: {selectedAvailabilitySummary}
+                  </p>
+                )}
+              </fieldset>
               <div className="weekly-availability-table">
                 <div className="weekly-availability-header" aria-hidden="true">
                   <span>Day</span><span>Available</span><span>From</span><span>Until</span>
@@ -317,13 +443,58 @@ export function ResourceFormPage({ mode }: { mode: "add" | "edit" }) {
                   const key = label.toLowerCase();
                   return (
                     <div className="weekly-availability-row" key={label}>
-                      <strong>{label}</strong>
+                      <div className="availability-day-label">
+                        <strong><abbr title={label}>{label.slice(0, 3)}</abbr></strong>
+                        <label className="availability-full-day">
+                          <input
+                            type="checkbox"
+                            name={`${key}FullDay`}
+                            checked={configured.fullDay}
+                            disabled={!configured.active}
+                            onChange={(event) => {
+                              updateAvailability(day, "fullDay", event.target.checked);
+                              if (event.target.checked) {
+                                updateAvailability(day, "startTime", "00:00");
+                                updateAvailability(day, "endTime", "23:59");
+                              }
+                            }}
+                          />
+                          <span>Full day</span>
+                        </label>
+                      </div>
                       <label className="availability-checkbox">
-                        <input type="checkbox" name={`${key}Available`} defaultChecked={configured.active} />
+                        <input
+                          type="checkbox"
+                          name={`${key}Available`}
+                          checked={configured.active}
+                          onChange={(event) =>
+                            updateAvailability(day, "active", event.target.checked)
+                          }
+                        />
                         <span className="visually-hidden">{label} available</span>
                       </label>
-                      <input aria-label={`${label} available from`} type="time" name={`${key}Start`} defaultValue={configured.startTime} required={configured.active} />
-                      <input aria-label={`${label} available until`} type="time" name={`${key}End`} defaultValue={configured.endTime} required={configured.active} />
+                      <input
+                        aria-label={`${label} available from`}
+                        type="time"
+                        name={`${key}Start`}
+                        value={configured.startTime}
+                        disabled={configured.fullDay}
+                        onChange={(event) =>
+                          updateAvailability(day, "startTime", event.target.value)
+                        }
+                        required={configured.active && !configured.fullDay}
+                      />
+                      <input
+                        aria-label={`${label} available until`}
+                        type="time"
+                        name={`${key}End`}
+                        value={configured.endTime}
+                        disabled={configured.fullDay}
+                        onChange={(event) =>
+                          updateAvailability(day, "endTime", event.target.value)
+                        }
+                        required={configured.active && !configured.fullDay}
+                      />
                     </div>
                   );
                 })}
