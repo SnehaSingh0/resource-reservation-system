@@ -7,6 +7,8 @@ import { apiUrl } from "../../api/apiUrl";
 import { requireCsrfToken } from "../../api/csrf";
 
 type BookingStatus = "Confirmed" | "Pending" | "Cancelled";
+// Cancelled is a valid display status — cancelled reservations are shown so the user
+// can confirm their cancellation was recorded.
 
 type Booking = {
   id: number | string;
@@ -32,6 +34,24 @@ function formatDisplayTime(timeValue: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function getReservationEndDateTime(
+  date: string,
+  endDate: string | null | undefined,
+  endTime: string | null,
+  isFullDay: boolean,
+): Date | null {
+  const effectiveEndDate = endDate || date;
+  if (isFullDay) {
+    return new Date(`${effectiveEndDate}T23:59:59`);
+  }
+  // Guard: if end_time is null for a timed booking, we cannot determine when it ends.
+  // Return null so the caller can decide how to handle it rather than produce Invalid Date.
+  if (!endTime) {
+    return null;
+  }
+  return new Date(`${effectiveEndDate}T${endTime}`);
 }
 
 export function MyReservationsPage() {
@@ -62,28 +82,54 @@ export function MyReservationsPage() {
         id: number;
         resource_name: string;
         reservation_date: string;
-        start_time: string;
-        end_time: string;
+        end_date?: string | null;
+        start_time: string | null;
+        end_time: string | null;
+        is_full_day: boolean;
         status: string;
       }>;
 
-      const nextBookings: Booking[] = (Array.isArray(payload) ? payload : []).map((reservation) => {
-        const normalizedStatus: BookingStatus =
-          reservation.status === "CANCELLED"
-            ? "Cancelled"
-            : reservation.status === "PENDING"
-              ? "Pending"
-              : "Confirmed";
-
-        return {
-          id: reservation.id,
-          resource: reservation.resource_name,
-          date: formatDisplayDate(reservation.reservation_date),
-          startTime: formatDisplayTime(reservation.start_time),
-          endTime: formatDisplayTime(reservation.end_time),
-          status: normalizedStatus,
-        };
-      });
+      const nextBookings: Booking[] = (Array.isArray(payload) ? payload : [])
+        .filter((reservation) => {
+          // Always show cancelled reservations so users can confirm their cancellation was recorded.
+          if (reservation.status === "CANCELLED") return true;
+          // For active/pending reservations, hide ones that have already ended.
+          const endDt = getReservationEndDateTime(
+            reservation.reservation_date,
+            reservation.end_date,
+            reservation.end_time,
+            reservation.is_full_day,
+          );
+          // If end time cannot be determined (null end_time on a timed booking), show it
+          // rather than silently dropping it — the user should be aware of it.
+          if (endDt === null) return true;
+          return endDt.getTime() >= Date.now();
+        })
+        .map((reservation) => {
+          const normalizedStatus: BookingStatus =
+            reservation.status === "CANCELLED"
+              ? "Cancelled"
+              : reservation.status === "PENDING"
+                ? "Pending"
+                : "Confirmed";
+          const startDate = formatDisplayDate(reservation.reservation_date);
+          const endDate = reservation.end_date ? formatDisplayDate(reservation.end_date) : startDate;
+          return {
+            id: reservation.id,
+            resource: reservation.resource_name,
+            date:
+              reservation.end_date && reservation.end_date !== reservation.reservation_date
+                ? `${startDate} – ${endDate}`
+                : startDate,
+            startTime: reservation.is_full_day
+              ? "All day"
+              : formatDisplayTime(reservation.start_time ?? ""),
+            endTime: reservation.is_full_day
+              ? "All day"
+              : formatDisplayTime(reservation.end_time ?? ""),
+            status: normalizedStatus,
+          };
+        });
 
       setBookings(nextBookings);
     } catch (loadError) {
@@ -125,11 +171,7 @@ export function MyReservationsPage() {
       }
 
       setBookings((current) =>
-        current.map((booking) =>
-          booking.id === bookingToCancel.id
-            ? { ...booking, status: "Cancelled" }
-            : booking,
-        ),
+        current.filter((booking) => booking.id !== bookingToCancel.id),
       );
       setBookingToCancel(null);
       setError("");
@@ -139,6 +181,7 @@ export function MyReservationsPage() {
           ? cancelError.message
           : "Could not cancel this reservation.";
       setError(message);
+      setBookingToCancel(null);
     } finally {
       setIsCancelling(false);
     }
@@ -148,14 +191,12 @@ export function MyReservationsPage() {
     <div className="content-stack">
       <PageHeading
         title="My Reservations"
-        description="Review and manage your resource reservations."
       />
 
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>
-            <h2>Reservations</h2>
-            <p>{bookings.length} reservations</p>
+            <h2>Upcoming reservations</h2>
           </div>
         </div>
 
@@ -187,7 +228,6 @@ export function MyReservationsPage() {
                   <tr key={String(booking.id)}>
                     <td>
                       <strong>{booking.resource}</strong>
-                      <small className="table-subtext">{String(booking.id)}</small>
                     </td>
                     <td>{booking.date}</td>
                     <td>{booking.startTime}</td>

@@ -9,8 +9,10 @@ type Reservation = {
   user_email: string;
   resource_name: string;
   reservation_date: string;
-  start_time: string;
-  end_time: string;
+  end_date?: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  is_full_day: boolean;
   status: "CONFIRMED" | "PENDING" | "CANCELLED";
 };
 
@@ -32,7 +34,6 @@ function formatDate(value: string) {
 
 export function AdminReservationsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [statusFilter, setStatusFilter] = useState("all");
   const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
@@ -75,8 +76,14 @@ export function AdminReservationsPage() {
         "Could not cancel this reservation.",
       );
       setReservationToCancel(null);
-      setNotice(`Reservation ${reservationToCancel.id} was cancelled. Its history remains available.`);
-      await loadReservations();
+      setNotice(`Reservation ${reservationToCancel.id} was cancelled.`);
+      setReservations((current) =>
+        current.map((reservation) =>
+          reservation.id === reservationToCancel.id
+            ? { ...reservation, status: "CANCELLED" as const }
+            : reservation,
+        ),
+      );
     } catch (cancelError) {
       setError(
         cancelError instanceof Error ? cancelError.message : "Could not cancel this reservation.",
@@ -87,34 +94,16 @@ export function AdminReservationsPage() {
     }
   }
 
-  const visibleReservations =
-    statusFilter === "all"
-      ? reservations
-      : reservations.filter((reservation) => reservation.status.toLowerCase() === statusFilter);
-
   return (
     <div className="content-stack">
-      <PageHeading
-        title="Manage Reservations"
-        description="Review and manage resource reservations."
-      />
+      <PageHeading title="Manage Reservations" />
       {notice && <div className="inline-notice" role="status">{notice}</div>}
       {error && <div className="inline-notice inline-notice-error" role="alert">{error}</div>}
       <section className="panel table-panel">
         <div className="panel-heading">
           <div>
             <h2>All reservations</h2>
-            <p>{loading ? "Loading…" : `${visibleReservations.length} reservations shown`}</p>
           </div>
-          <label className="compact-select">
-            <span className="visually-hidden">Filter reservations</span>
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-              <option value="all">All reservations</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="pending">Pending</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </label>
         </div>
         <div className="table-scroll" role="region" aria-label="Reservations table" tabIndex={0}>
           <table className="data-table">
@@ -125,26 +114,40 @@ export function AdminReservationsPage() {
               </tr>
             </thead>
             <tbody>
-              {!loading && visibleReservations.map((reservation) => (
-                <tr key={reservation.id}>
-                  <td><strong>{reservation.user_email}</strong><small className="table-subtext">{reservation.id}</small></td>
-                  <td>{reservation.resource_name}</td>
-                  <td>{formatDate(reservation.reservation_date)}</td>
-                  <td>{reservation.start_time.slice(0, 5)}</td>
-                  <td>{reservation.end_time.slice(0, 5)}</td>
-                  <td><StatusBadge status={displayStatus(reservation.status)} /></td>
-                  <td>
-                    {reservation.status !== "CANCELLED" ? (
-                      <button className="table-action table-action-danger" type="button" onClick={() => setReservationToCancel(reservation)}>
-                        Cancel
-                      </button>
-                    ) : <span className="table-muted-action">—</span>}
-                  </td>
-                </tr>
-              ))}
+              {!loading && reservations.map((reservation) => {
+                const endDate = reservation.end_date || reservation.reservation_date;
+                const dateLabel =
+                  reservation.end_date && reservation.end_date !== reservation.reservation_date
+                    ? `${formatDate(reservation.reservation_date)} – ${formatDate(endDate)}`
+                    : formatDate(reservation.reservation_date);
+
+                return (
+                  <tr key={reservation.id}>
+                    <td><strong>{reservation.user_email}</strong></td>
+                    <td>{reservation.resource_name}</td>
+                    <td>{dateLabel}</td>
+                    <td>{reservation.is_full_day ? "All day" : reservation.start_time?.slice(0, 5)}</td>
+                    <td>{reservation.is_full_day ? "All day" : reservation.end_time?.slice(0, 5)}</td>
+                    <td><StatusBadge status={displayStatus(reservation.status)} /></td>
+                    <td>
+                      {reservation.status !== "CANCELLED" ? (
+                        <button
+                          className="table-action table-action-danger"
+                          type="button"
+                          onClick={() => setReservationToCancel(reservation)}
+                        >
+                          Cancel
+                        </button>
+                      ) : (
+                        <span className="table-muted-action">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {loading && <tr><td className="empty-table" colSpan={7}>Loading reservations…</td></tr>}
-              {!loading && visibleReservations.length === 0 && (
-                <tr><td className="empty-table" colSpan={7}>No reservations match this filter.</td></tr>
+              {!loading && reservations.length === 0 && (
+                <tr><td className="empty-table" colSpan={7}>No reservations found.</td></tr>
               )}
             </tbody>
           </table>

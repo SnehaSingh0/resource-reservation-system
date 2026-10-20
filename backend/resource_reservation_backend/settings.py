@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -86,12 +87,12 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = environment_origins(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173" if DEBUG else "",
+    "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
 )
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = environment_origins(
     "CSRF_TRUSTED_ORIGINS",
-    "http://localhost:5173" if DEBUG else "",
+    "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
 )
 
 ROOT_URLCONF = "resource_reservation_backend.urls"
@@ -116,6 +117,22 @@ WSGI_APPLICATION = "resource_reservation_backend.wsgi.application"
 POSTGRES_ENGINE = "django.db.backends.postgresql"
 SQLITE_ENGINE = "django.db.backends.sqlite3"
 DB_ENGINE = os.environ.get("DB_ENGINE", POSTGRES_ENGINE).strip()
+DB_SSLMODE = os.environ.get("DB_SSLMODE", "require").strip().lower()
+if DB_SSLMODE not in {"disable", "allow", "prefer", "require"}:
+    raise ImproperlyConfigured(
+        "DB_SSLMODE must be one of: disable, allow, prefer, require. "
+        "Use 'require' for hosted Postgres or 'disable' only for an explicitly local "
+        "PostgreSQL instance that is not configured for SSL."
+    )
+
+# Warn at startup when SSL is weakened in a production (non-DEBUG) environment.
+# This catches misconfiguration before any database connection is made.
+if DB_SSLMODE != "require" and not DEBUG:
+    logging.getLogger(__name__).warning(
+        "DB_SSLMODE is set to %r, not 'require'. "
+        "Production deployments should use sslmode=require to encrypt database traffic.",
+        DB_SSLMODE,
+    )
 
 if DB_ENGINE == SQLITE_ENGINE:
     DATABASES = {
@@ -139,9 +156,7 @@ elif DB_ENGINE == POSTGRES_ENGINE:
             "PASSWORD": os.environ["DB_PASSWORD"],
             "HOST": os.environ.get("DB_HOST", "127.0.0.1"),
             "PORT": os.environ.get("DB_PORT", "5432"),
-            "OPTIONS": {
-            "sslmode": "require",
-          },
+            "OPTIONS": {"sslmode": DB_SSLMODE},
         }
     }
 else:

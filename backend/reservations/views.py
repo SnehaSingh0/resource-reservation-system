@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import re
 import traceback
+from datetime import time, timedelta
 
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import validate_email
 from django.db import transaction
+from django.db.models import Q
 from django.core.exceptions import ValidationError
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
@@ -23,6 +25,7 @@ from .permissions import IsAdminOrReadOnly, IsAdminUser, IsOwnerOrAdmin
 from .serializers import (
     ReservationSerializer,
     ReservationWriteSerializer,
+    AdminUpdateSerializer,
     ResourceAvailabilityConstraintSerializer,
     ResourceAvailabilityQuerySerializer,
     ResourceSerializer,
@@ -185,11 +188,70 @@ class CurrentUserView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+def _create_managed_user_account(data, role):
+    password = data.get("password")
+    if not isinstance(password, str) or not password:
+        return Response({"detail": "Password is required."}, status=400)
+
+    raw_email = data.get("email")
+    email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
+    if not email:
+        return Response({"detail": "Email is required."}, status=400)
+    try:
+        validate_email(email)
+    except ValidationError as exc:
+        return Response({"email": list(exc.messages)}, status=400)
+    if UserModel.objects.filter(email=email).exists():
+        return Response({"email": ["A user with this email already exists."]}, status=400)
+    try:
+        validate_password(password)
+    except ValidationError as exc:
+        return Response({"password": list(exc.messages)}, status=400)
+
+    username = data.get("username") or email.split("@")[0]
+    username = username[:150]
+    base_username = username
+    suffix = 1
+    while UserModel.objects.filter(username=username).exists():
+        suffix_text = str(suffix)
+        username = f"{base_username[:150 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    user = UserModel.objects.create_user(
+        username=username,
+        email=email,
+        password=password,
+        role=role,
+        first_name=data.get("first_name", ""),
+        last_name=data.get("last_name", ""),
+        phone=data.get("phone", ""),
+    )
+    return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+
 class UserListView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
         return Response(UserSerializer(UserModel.objects.all(), many=True).data)
+
+    def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Expected a JSON object."}, status=400)
+
+        data = request.data.copy()
+        role = data.get("role")
+        # Explicitly whitelist only the two roles this endpoint is designed to create.
+        # Do not derive the set from ROLE_CHOICES to avoid unintentionally accepting
+        # any future roles added to that list.
+        creatable_roles = {User.ROLE_USER, User.ROLE_ADMIN}
+        if not isinstance(role, str) or role not in creatable_roles:
+            return Response(
+                {"role": [f"Select a supported role ({', '.join(sorted(creatable_roles))})."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return _create_managed_user_account(data, role)
 
 
 class ResourceListCreateView(APIView):
@@ -247,8 +309,55 @@ class ResourceAvailabilityView(APIView):
         )
         start_date = query_serializer.validated_data.get("start_date")
         end_date = query_serializer.validated_data.get("end_date")
+
         if start_date and end_date:
-            bookings = bookings.filter(reservation_date__range=(start_date, end_date))
+            bookings = bookings.filter(reservation_date__lte=end_date).filter(
+                Q(end_date__gte=start_date)
+                | Q(end_date__isnull=True, reservation_date__gte=start_date)
+            )
+
+        payload_bookings = []
+        for booking in bookings.only(
+            "reservation_date",
+            "end_date",
+            "start_time",
+            "end_time",
+            "is_full_day",
+            "status",
+        ):
+            original_start = booking.reservation_date
+            original_end = booking.end_date or booking.reservation_date
+            booking_start = max(original_start, start_date) if start_date else original_start
+            booking_end = min(original_end, end_date) if end_date else original_end
+            current_date = booking_start
+            while current_date <= booking_end:
+                if booking.is_full_day:
+                    start_time = end_time = None
+                else:
+                    if current_date == original_end and booking.end_time == time.min:
+                        current_date += timedelta(days=1)
+                        continue
+                    start_time = (
+                        booking.start_time.strftime("%H:%M")
+                        if current_date == original_start
+                        else "00:00"
+                    )
+                    end_time = (
+                        booking.end_time.strftime("%H:%M")
+                        if current_date == original_end
+                        else "24:00"
+                    )
+                payload_bookings.append(
+                    {
+                        "date": current_date.isoformat(),
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "is_full_day": booking.is_full_day,
+                        "status": booking.status,
+                    }
+                )
+                current_date += timedelta(days=1)
+
         payload = {
             "resource_id": resource.id,
             "resource_name": resource.name,
@@ -256,15 +365,7 @@ class ResourceAvailabilityView(APIView):
                 "start": resource.default_start_time.strftime("%H:%M"),
                 "end": resource.default_end_time.strftime("%H:%M"),
             },
-            "bookings": [
-                {
-                    "date": booking.reservation_date.isoformat(),
-                    "start_time": booking.start_time.strftime("%H:%M"),
-                    "end_time": booking.end_time.strftime("%H:%M"),
-                    "status": booking.status,
-                }
-                for booking in bookings
-            ],
+            "bookings": payload_bookings,
         }
         return Response(payload)
 
@@ -327,10 +428,13 @@ class ReservationListCreateView(APIView):
                 reservation = create_or_update_reservation(
                     user=request.user,
                     resource_id=serializer.validated_data["resource"].id,
-                    reservation_date=serializer.validated_data["reservation_date"],
-                    start_time=serializer.validated_data["start_time"],
-                    end_time=serializer.validated_data["end_time"],
+                    reservation_date=serializer.validated_data.get("reservation_date")
+                    or serializer.validated_data.get("start_date"),
+                    start_time=serializer.validated_data.get("start_time"),
+                    end_time=serializer.validated_data.get("end_time"),
+                    is_full_day=serializer.validated_data.get("is_full_day", False),
                     notes=serializer.validated_data.get("notes", ""),
+                    end_date=serializer.validated_data.get("end_date"),
                 )
         except (PermissionError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -359,10 +463,13 @@ class ReservationDetailView(APIView):
                     reservation=reservation,
                     user=request.user,
                     resource_id=serializer.validated_data["resource"].id,
-                    reservation_date=serializer.validated_data["reservation_date"],
-                    start_time=serializer.validated_data["start_time"],
-                    end_time=serializer.validated_data["end_time"],
+                    reservation_date=serializer.validated_data.get("reservation_date")
+                    or serializer.validated_data.get("start_date"),
+                    start_time=serializer.validated_data.get("start_time"),
+                    end_time=serializer.validated_data.get("end_time"),
+                    is_full_day=serializer.validated_data.get("is_full_day", False),
                     notes=serializer.validated_data.get("notes", ""),
+                    end_date=serializer.validated_data.get("end_date"),
                 )
         except (PermissionError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -411,48 +518,26 @@ class AdminListCreateView(APIView):
     def post(self, request):
         if not isinstance(request.data, dict):
             return Response({"detail": "Expected a JSON object."}, status=400)
-        data = request.data.copy()
-        password = data.get("password")
-        if not isinstance(password, str) or not password:
-            return Response({"detail": "Password is required."}, status=400)
-        raw_email = data.get("email")
-        email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
-        if not email:
-            return Response({"detail": "Email is required."}, status=400)
-        try:
-            validate_email(email)
-        except ValidationError as exc:
-            return Response({"email": list(exc.messages)}, status=400)
-        if UserModel.objects.filter(email=email).exists():
-            return Response({"email": ["A user with this email already exists."]}, status=400)
-        try:
-            validate_password(password)
-        except ValidationError as exc:
-            return Response({"password": list(exc.messages)}, status=400)
-
-        username = data.get("username") or email.split("@")[0]
-        username = username[:150]
-        base_username = username
-        suffix = 1
-        while UserModel.objects.filter(username=username).exists():
-            suffix_text = str(suffix)
-            username = f"{base_username[:150 - len(suffix_text)]}{suffix_text}"
-            suffix += 1
-
-        admin = UserModel.objects.create_user(
-            username=username,
-            email=email,
-            password=password,
-            role=User.ROLE_ADMIN,
-            first_name=data.get("first_name", ""),
-            last_name=data.get("last_name", ""),
-            phone=data.get("phone", ""),
+        return _create_managed_user_account(
+            request.data.copy(),
+            User.ROLE_ADMIN,
         )
-        return Response(UserSerializer(admin).data, status=status.HTTP_201_CREATED)
 
 
 class AdminDetailView(APIView):
     permission_classes = [IsAdminUser]
+
+    def get(self, request, pk):
+        admin = get_object_or_404(UserModel, pk=pk, role=User.ROLE_ADMIN)
+        return Response(UserSerializer(admin).data)
+
+    def put(self, request, pk):
+        admin = get_object_or_404(UserModel, pk=pk, role=User.ROLE_ADMIN)
+        serializer = AdminUpdateSerializer(admin, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(UserSerializer(admin).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
         with transaction.atomic():
