@@ -8,9 +8,25 @@ from django.contrib.auth.backends import (
     check_password_with_timing_attack_mitigation,
 )
 from django.views.decorators.debug import sensitive_variables
+from rest_framework.authentication import SessionAuthentication
 
 
 timing_logger = logging.getLogger("reservations.request_timing")
+
+
+class TimedSessionAuthentication(SessionAuthentication):
+    def authenticate(self, request):
+        if not settings.REQUEST_TIMING_ENABLED:
+            return super().authenticate(request)
+
+        started_at = perf_counter_ns()
+        try:
+            return super().authenticate(request)
+        finally:
+            timing_logger.info(
+                "phase=session_authentication duration_ms=%.2f",
+                (perf_counter_ns() - started_at) / 1_000_000,
+            )
 
 
 class TimedModelBackend(ModelBackend):

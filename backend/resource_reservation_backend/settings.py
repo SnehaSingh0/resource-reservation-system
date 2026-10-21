@@ -203,7 +203,11 @@ SECURE_SSL_REDIRECT = not DEBUG
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
+        (
+            "reservations.authentication.TimedSessionAuthentication"
+            if REQUEST_TIMING_ENABLED
+            else "rest_framework.authentication.SessionAuthentication"
+        ),
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",

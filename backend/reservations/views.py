@@ -4,6 +4,7 @@ import logging
 import re
 import traceback
 from datetime import time, timedelta
+from functools import wraps
 from time import perf_counter_ns
 
 from django.conf import settings
@@ -43,6 +44,47 @@ timing_logger = logging.getLogger("reservations.request_timing")
 
 _MISSING_TABLE = re.compile(r'relation "([^"]+)" does not exist')
 _MISSING_COLUMN = re.compile(r'column "([^"]+)" does not exist')
+
+
+def _timed_view_handler(route):
+    def decorate(handler):
+        @wraps(handler)
+        def wrapped(self, request, *args, **kwargs):
+            if not settings.REQUEST_TIMING_ENABLED:
+                return handler(self, request, *args, **kwargs)
+
+            started_at = perf_counter_ns()
+            response = None
+            try:
+                response = handler(self, request, *args, **kwargs)
+                return response
+            finally:
+                status_code = response.status_code if response is not None else "exception"
+                timing_logger.info(
+                    "phase=view_handler method=GET path=/%s status=%s duration_ms=%.2f",
+                    route,
+                    status_code,
+                    (perf_counter_ns() - started_at) / 1_000_000,
+                )
+
+        return wrapped
+
+    return decorate
+
+
+def _timed_serializer_data(serializer, route):
+    if not settings.REQUEST_TIMING_ENABLED:
+        return serializer.data
+
+    started_at = perf_counter_ns()
+    try:
+        return serializer.data
+    finally:
+        timing_logger.info(
+            "phase=serializer_data path=/%s duration_ms=%.2f",
+            route,
+            (perf_counter_ns() - started_at) / 1_000_000,
+        )
 
 
 def _safe_database_error_details(exception):
@@ -256,8 +298,10 @@ def _create_managed_user_account(data, role):
 class UserListView(APIView):
     permission_classes = [IsAdminUser]
 
+    @_timed_view_handler("api/users/")
     def get(self, request):
-        return Response(UserSerializer(UserModel.objects.all(), many=True).data)
+        serializer = UserSerializer(UserModel.objects.all(), many=True)
+        return Response(_timed_serializer_data(serializer, "api/users/"))
 
     def post(self, request):
         if not isinstance(request.data, dict):
@@ -281,8 +325,10 @@ class UserListView(APIView):
 class ResourceListCreateView(APIView):
     permission_classes = [IsAdminOrReadOnly]
 
+    @_timed_view_handler("api/resources/")
     def get(self, request):
-        return Response(ResourceSerializer(Resource.objects.all(), many=True).data)
+        serializer = ResourceSerializer(Resource.objects.all(), many=True)
+        return Response(_timed_serializer_data(serializer, "api/resources/"))
 
     def post(self, request):
         serializer = ResourceSerializer(data=request.data)
@@ -526,6 +572,7 @@ class ReservationDetailView(APIView):
 class AdminReservationListView(APIView):
     permission_classes = [IsAdminUser]
 
+    @_timed_view_handler("api/admin/reservations/")
     def get(self, request):
         today = timezone.localdate()
         current_time = timezone.localtime().time()
@@ -561,7 +608,10 @@ class AdminReservationListView(APIView):
                 & timed_reservations_not_ended
             )
         )
-        return Response(ReservationSerializer(reservations, many=True).data)
+        serializer = ReservationSerializer(reservations, many=True)
+        return Response(
+            _timed_serializer_data(serializer, "api/admin/reservations/")
+        )
 
 
 class AdminReservationDeleteView(APIView):
@@ -583,9 +633,11 @@ class AdminReservationDeleteView(APIView):
 class AdminListCreateView(APIView):
     permission_classes = [IsAdminUser]
 
+    @_timed_view_handler("api/admins/")
     def get(self, request):
         admins = UserModel.objects.filter(role=User.ROLE_ADMIN)
-        return Response(UserSerializer(admins, many=True).data)
+        serializer = UserSerializer(admins, many=True)
+        return Response(_timed_serializer_data(serializer, "api/admins/"))
 
     def post(self, request):
         if not isinstance(request.data, dict):
