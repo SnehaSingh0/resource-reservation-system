@@ -127,6 +127,14 @@ This check attempts the actual PostgreSQL connection. It does not change databas
 
 Set `DJANGO_DEBUG=false`, `DJANGO_SECRET_KEY`, and a comma-separated `DJANGO_ALLOWED_HOSTS` on the backend host. Set `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` to the exact HTTPS frontend origin(s), without trailing slashes. Configure `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_PORT` in the backend host's environment or secret manager. When debug is disabled, secure session and CSRF cookies and HTTPS redirect are enabled, and Django requires a secret key and explicit allowed hosts. Do not expose database credentials or `DJANGO_SECRET_KEY` as frontend/Vite variables.
 
+### Temporary request timing diagnostics
+
+To temporarily measure time spent inside Django for each handled request, set `REQUEST_TIMING_ENABLED=true` in the backend service's environment (for example, Render's service environment variables) and redeploy. The diagnostic is disabled by default and does not require or enable `DJANGO_DEBUG`. Its stdout log contains the HTTP method, resolved URL route template, response status, and elapsed Django time in milliseconds. Route templates omit dynamic path values, and query strings are not logged. Request/response bodies, headers, cookies, and database configuration are not read or logged.
+
+Use the Render service logs to compare `duration_ms` for a request with the browser's total waiting time for the same request. A small Django duration alongside a much larger browser wait indicates time outside Django, such as connection setup, platform/proxy handling, or network transfer. A Django duration close to the browser wait places most of the delay within the Django request path; the middleware does not break that time down further.
+
+After collecting enough samples, disable the diagnostic by removing `REQUEST_TIMING_ENABLED` or setting it to `false`, then redeploy. It can also be removed by deleting `reservations.middleware.RequestTimingMiddleware` and its registration, logger configuration, test, and this section.
+
 The frontend must build with `VITE_API_BASE_URL` set to the HTTPS API base ending in `/api`. Because login uses cross-origin session cookies, the backend CORS and CSRF origin lists must match the browser-facing frontend origin. Configure the production database's networking and application-role grants before starting the app; do not run migrations as an implicit startup operation.
 
 Run the full backend test suite from this directory with `python manage.py test`. The default database is PostgreSQL; Django creates a temporary test database, so the configured PostgreSQL role must be allowed to create it. PostgreSQL-specific tests are skipped when SQLite is explicitly selected and cannot be counted as PostgreSQL validation.

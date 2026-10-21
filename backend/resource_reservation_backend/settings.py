@@ -29,6 +29,7 @@ def environment_flag(name, default):
 
 
 DEBUG = environment_flag("DJANGO_DEBUG", "true")
+REQUEST_TIMING_ENABLED = environment_flag("REQUEST_TIMING_ENABLED", "false")
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "").strip()
 if not SECRET_KEY:
     if DEBUG:
@@ -96,6 +97,9 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+if REQUEST_TIMING_ENABLED:
+    MIDDLEWARE.insert(0, "reservations.middleware.RequestTimingMiddleware")
 
 CORS_ALLOWED_ORIGINS = environment_origins(
     "CORS_ALLOWED_ORIGINS",
@@ -221,11 +225,21 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "safe",
         },
+        "request_timing_console": {
+            "class": "logging.StreamHandler",
+            "formatter": "safe",
+            "stream": "ext://sys.stdout",
+        },
     },
     "loggers": {
         "reservations.views": {
             "handlers": ["login_diagnostics"],
             "level": "ERROR",
+            "propagate": False,
+        },
+        "reservations.request_timing": {
+            "handlers": ["request_timing_console"],
+            "level": "INFO",
             "propagate": False,
         },
     },
