@@ -30,6 +30,7 @@ With `DEBUG=true`, local development defaults trust Vite origins on `localhost` 
 - `PUT /api/resources/<id>/`
 - `DELETE /api/resources/<id>/`
 - `GET /api/resources/<id>/availability/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
+- `GET /api/resources/constraints/` — list constraints for all resources in one authenticated request
 - `GET /api/resources/<id>/constraints/`
 - `POST /api/resources/<id>/constraints/`
 - `GET /api/resource-constraints/<id>/`

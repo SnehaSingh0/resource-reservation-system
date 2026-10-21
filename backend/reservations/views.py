@@ -393,6 +393,16 @@ class ResourceAvailabilityView(APIView):
         return Response(payload)
 
 
+class ResourceConstraintBulkListView(APIView):
+    permission_classes = [IsAdminOrReadOnly]
+
+    def get(self, request):
+        constraints = ResourceAvailabilityConstraint.objects.all()
+        return Response(
+            ResourceAvailabilityConstraintSerializer(constraints, many=True).data
+        )
+
+
 class ResourceConstraintListCreateView(APIView):
     permission_classes = [IsAdminOrReadOnly]
 

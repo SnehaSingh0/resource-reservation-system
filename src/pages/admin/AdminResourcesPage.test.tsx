@@ -39,10 +39,10 @@ describe("AdminResourcesPage", () => {
     vi.mocked(adminApi).mockReset();
   });
 
-  it("keeps resources visible when one availability request fails", async () => {
+  it("keeps resources visible when the bulk availability request fails", async () => {
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
       if (path === "/resources/") return resources as T;
-      if (path === "/resources/1/constraints/") {
+      if (path === "/resources/constraints/") {
         throw new Error("Could not load availability for Board Room.");
       }
       return [] as T;
@@ -55,14 +55,74 @@ describe("AdminResourcesPage", () => {
 
     expect(await screen.findByText("Board Room")).toBeTruthy();
     expect(screen.getByText("Projector")).toBeTruthy();
-    expect(screen.getByText("Could not load availability for Board Room.")).toBeTruthy();
-    expect(screen.getByText("All week · Full day")).toBeTruthy();
+    expect(
+      screen.getAllByText("Could not load availability for Board Room."),
+    ).toHaveLength(resources.length);
+  });
+
+  it("groups bulk constraints by resource", async () => {
+    vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
+      if (path === "/resources/") return resources as T;
+      if (path === "/resources/constraints/") {
+        return [
+          {
+            id: 1,
+            resource: 1,
+            day_of_week: 0,
+            start_time: "09:00:00",
+            end_time: "12:00:00",
+            is_full_day: false,
+            is_active: true,
+          },
+          {
+            id: 2,
+            resource: 2,
+            day_of_week: 0,
+            start_time: "13:00:00",
+            end_time: "17:00:00",
+            is_full_day: false,
+            is_active: true,
+          },
+        ] as T;
+      }
+      return [] as T;
+    });
+    render(
+      <MemoryRouter>
+        <AdminResourcesPage />
+      </MemoryRouter>,
+    );
+
+    const boardRoomRow = await screen.findByRole("row", { name: /Board Room/ });
+    expect(boardRoomRow.textContent).toContain("09:00 – 12:00");
+    expect(boardRoomRow.textContent).not.toContain("13:00 – 17:00");
+
+    const projectorRow = screen.getByRole("row", { name: /Projector/ });
+    expect(projectorRow.textContent).toContain("13:00 – 17:00");
+    expect(projectorRow.textContent).not.toContain("09:00 – 12:00");
+  });
+
+  it("does not fetch bulk constraints when there are no resources", async () => {
+    vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
+      if (path === "/resources/") return [] as T;
+      return [] as T;
+    });
+    render(
+      <MemoryRouter>
+        <AdminResourcesPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("No resources are available.")).toBeTruthy();
+    expect(
+      vi.mocked(adminApi).mock.calls.some(([path]) => path === "/resources/constraints/"),
+    ).toBe(false);
   });
 
   it("shows a progressive-disclosure weekly schedule for variable hours", async () => {
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
       if (path === "/resources/") return [resources[1]] as T;
-      if (path === "/resources/2/constraints/") {
+      if (path === "/resources/constraints/") {
         return [
           {
             id: 1,
@@ -140,7 +200,7 @@ describe("AdminResourcesPage", () => {
   it("groups consecutive custom full-day availability in a compact summary", async () => {
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
       if (path === "/resources/") return [resources[0]] as T;
-      if (path === "/resources/1/constraints/") {
+      if (path === "/resources/constraints/") {
         return [0, 1, 2, 3, 4].map((day, id) => ({
           id,
           resource: 1,
@@ -169,7 +229,7 @@ describe("AdminResourcesPage", () => {
       if (path === "/resources/" && options.method !== "DELETE") {
         return (exists ? resources : [resources[1]]) as T;
       }
-      if (path.endsWith("/constraints/")) return [] as T;
+      if (path === "/resources/constraints/") return [] as T;
       if (path === "/resources/1/" && options.method === "DELETE") {
         exists = false;
         return undefined as T;
@@ -197,10 +257,7 @@ describe("AdminResourcesPage", () => {
     const requests = vi.mocked(adminApi).mock.calls;
     expect(requests.filter(([path]) => path === "/resources/")).toHaveLength(1);
     expect(
-      requests.filter(([path]) => path === "/resources/1/constraints/"),
-    ).toHaveLength(1);
-    expect(
-      requests.filter(([path]) => path === "/resources/2/constraints/"),
+      requests.filter(([path]) => path === "/resources/constraints/"),
     ).toHaveLength(1);
   });
 });

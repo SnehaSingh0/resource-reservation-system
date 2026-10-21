@@ -11,6 +11,7 @@ from .views import (
     LogoutView,
     RegisterUserView,
     ResourceAvailabilityView,
+    ResourceConstraintBulkListView,
     ResourceConstraintDetailView,
     ResourceConstraintListCreateView,
     ResourceDetailView,
@@ -28,6 +29,11 @@ urlpatterns = [
     path("users/me/", CurrentUserView.as_view(), name="user-me"),
     path("users/", UserListView.as_view(), name="user-list"),
     path("resources/", ResourceListCreateView.as_view(), name="resource-list-create"),
+    path(
+        "resources/constraints/",
+        ResourceConstraintBulkListView.as_view(),
+        name="resource-constraints-bulk",
+    ),
     path("resources/<int:pk>/", ResourceDetailView.as_view(), name="resource-detail"),
     path(
         "resources/<int:resource_id>/availability/",

@@ -1107,6 +1107,45 @@ class ReservationBusinessRulesTests(TestCase):
         self.assertEqual(delete_resource_response.status_code, 204)
         self.assertFalse(Resource.objects.filter(pk=self.resource.id).exists())
 
+    def test_bulk_resource_constraints_requires_authentication(self):
+        response = self.client.get("/api/resources/constraints/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_regular_user_can_fetch_all_resource_constraints_in_one_query(self):
+        another_resource = Resource.objects.create(
+            name="Projector",
+            resource_type="equipment",
+        )
+        first_constraint = ResourceAvailabilityConstraint.objects.create(
+            resource=self.resource,
+            day_of_week=0,
+            start_time=time(9, 0),
+            end_time=time(12, 0),
+        )
+        second_constraint = ResourceAvailabilityConstraint.objects.create(
+            resource=another_resource,
+            day_of_week=1,
+            start_time=time(10, 0),
+            end_time=time(13, 0),
+        )
+        self.client.force_authenticate(user=self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.get("/api/resources/constraints/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertCountEqual(
+            [
+                (item["id"], item["resource"])
+                for item in response.data
+            ],
+            [
+                (first_constraint.id, self.resource.id),
+                (second_constraint.id, another_resource.id),
+            ],
+        )
+
     def test_admin_resource_delete_cascades_reservations_and_availability_constraints(self):
         past_reservation = Reservation.objects.create(
             user=self.user,

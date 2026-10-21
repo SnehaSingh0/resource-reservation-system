@@ -370,38 +370,38 @@ export function AdminResourcesPage() {
     try {
       const nextResources = await adminApi<Resource[]>("/resources/", {}, "Could not load resources.");
       setResources(nextResources);
-      const constraintResults = await Promise.all(
-        nextResources.map(async (resource) => {
-          try {
-            return {
-              id: resource.id,
-              constraints: await adminApi<Constraint[]>(
-                `/resources/${resource.id}/constraints/`,
-                {},
-                `Could not load availability for ${resource.name}.`,
-              ),
-            };
-          } catch (availabilityError) {
-            return {
-              id: resource.id,
-              error: availabilityError instanceof Error
+      if (nextResources.length === 0) {
+        setConstraintsByResource({});
+        setAvailabilityErrors({});
+        return;
+      }
+      try {
+        const allConstraints = await adminApi<Constraint[]>(
+          "/resources/constraints/",
+          {},
+          "Could not load resource availability.",
+        );
+        const constraints = Object.fromEntries(
+          nextResources.map((resource) => [resource.id, [] as Constraint[]]),
+        ) as Record<number, Constraint[]>;
+        allConstraints.forEach((constraint) => {
+          constraints[constraint.resource]?.push(constraint);
+        });
+        setConstraintsByResource(constraints);
+        setAvailabilityErrors({});
+      } catch (availabilityError) {
+        setConstraintsByResource({});
+        setAvailabilityErrors(
+          Object.fromEntries(
+            nextResources.map((resource) => [
+              resource.id,
+              availabilityError instanceof Error
                 ? availabilityError.message
                 : `Could not load availability for ${resource.name}.`,
-            };
-          }
-        }),
-      );
-      const constraints: Record<number, Constraint[]> = {};
-      const availabilityErrors: Record<number, string> = {};
-      constraintResults.forEach((result) => {
-        if (result.constraints !== undefined) {
-          constraints[result.id] = result.constraints;
-        } else if (result.error) {
-          availabilityErrors[result.id] = result.error;
-        }
-      });
-      setConstraintsByResource(constraints);
-      setAvailabilityErrors(availabilityErrors);
+            ]),
+          ),
+        );
+      }
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Could not load resources.",
