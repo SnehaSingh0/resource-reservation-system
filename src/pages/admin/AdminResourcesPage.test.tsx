@@ -61,8 +61,13 @@ describe("AdminResourcesPage", () => {
   });
 
   it("groups bulk constraints by resource", async () => {
+    let resolveResources: ((value: typeof resources) => void) | undefined;
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
-      if (path === "/resources/") return resources as T;
+      if (path === "/resources/") {
+        return await new Promise<typeof resources>((resolve) => {
+          resolveResources = resolve;
+        }) as T;
+      }
       if (path === "/resources/constraints/") {
         return [
           {
@@ -93,6 +98,12 @@ describe("AdminResourcesPage", () => {
       </MemoryRouter>,
     );
 
+    expect(
+      vi.mocked(adminApi).mock.calls.map(([path]) => path),
+    ).toEqual(["/resources/", "/resources/constraints/"]);
+    if (!resolveResources) throw new Error("Resource request was not started.");
+    resolveResources(resources);
+
     const boardRoomRow = await screen.findByRole("row", { name: /Board Room/ });
     expect(boardRoomRow.textContent).toContain("09:00 – 12:00");
     expect(boardRoomRow.textContent).not.toContain("13:00 – 17:00");
@@ -102,7 +113,7 @@ describe("AdminResourcesPage", () => {
     expect(projectorRow.textContent).not.toContain("09:00 – 12:00");
   });
 
-  it("does not fetch bulk constraints when there are no resources", async () => {
+  it("handles an empty resource list", async () => {
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
       if (path === "/resources/") return [] as T;
       return [] as T;
@@ -115,8 +126,27 @@ describe("AdminResourcesPage", () => {
 
     expect(await screen.findByText("No resources are available.")).toBeTruthy();
     expect(
-      vi.mocked(adminApi).mock.calls.some(([path]) => path === "/resources/constraints/"),
-    ).toBe(false);
+      vi.mocked(adminApi).mock.calls.map(([path]) => path),
+    ).toEqual(["/resources/", "/resources/constraints/"]);
+  });
+
+  it("shows a resource-list error when the resources request fails", async () => {
+    vi.mocked(adminApi).mockImplementation(async <T,>(path: string) => {
+      if (path === "/resources/") {
+        throw new Error("Could not load resources.");
+      }
+      return [] as T;
+    });
+    render(
+      <MemoryRouter>
+        <AdminResourcesPage />
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not load resources.",
+    );
+    expect(screen.getByText("No resources are available.")).toBeTruthy();
   });
 
   it("shows a progressive-disclosure weekly schedule for variable hours", async () => {

@@ -368,7 +368,19 @@ export function AdminResourcesPage() {
     setLoading(true);
     setError("");
     try {
-      const nextResources = await adminApi<Resource[]>("/resources/", {}, "Could not load resources.");
+      const [resourcesResult, constraintsResult] = await Promise.allSettled([
+        adminApi<Resource[]>("/resources/", {}, "Could not load resources."),
+        adminApi<Constraint[]>(
+          "/resources/constraints/",
+          {},
+          "Could not load resource availability.",
+        ),
+      ]);
+      if (resourcesResult.status === "rejected") {
+        throw resourcesResult.reason;
+      }
+
+      const nextResources = resourcesResult.value;
       setResources(nextResources);
       if (nextResources.length === 0) {
         setConstraintsByResource({});
@@ -376,11 +388,10 @@ export function AdminResourcesPage() {
         return;
       }
       try {
-        const allConstraints = await adminApi<Constraint[]>(
-          "/resources/constraints/",
-          {},
-          "Could not load resource availability.",
-        );
+        if (constraintsResult.status === "rejected") {
+          throw constraintsResult.reason;
+        }
+        const allConstraints = constraintsResult.value;
         const constraints = Object.fromEntries(
           nextResources.map((resource) => [resource.id, [] as Constraint[]]),
         ) as Record<number, Constraint[]>;
