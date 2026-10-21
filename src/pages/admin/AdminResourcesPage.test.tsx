@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApi } from "../../api/adminApi";
@@ -167,9 +167,9 @@ describe("AdminResourcesPage", () => {
     let exists = true;
     vi.mocked(adminApi).mockImplementation(async <T,>(path: string, options: RequestInit = {}) => {
       if (path === "/resources/" && options.method !== "DELETE") {
-        return (exists ? [resources[0]] : []) as T;
+        return (exists ? resources : [resources[1]]) as T;
       }
-      if (path === "/resources/1/constraints/") return [] as T;
+      if (path.endsWith("/constraints/")) return [] as T;
       if (path === "/resources/1/" && options.method === "DELETE") {
         exists = false;
         return undefined as T;
@@ -182,13 +182,25 @@ describe("AdminResourcesPage", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const boardRoomRow = await screen.findByRole("row", { name: /Board Room/ });
+    fireEvent.click(within(boardRoomRow).getByRole("button", { name: "Delete" }));
     expect(
       screen.getByText(/all related reservations, including current or upcoming bookings/i),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete resource" }));
 
     await waitFor(() => expect(exists).toBe(false));
-    expect(screen.getByText("No resources are available.")).toBeTruthy();
+    expect(screen.queryByText("Board Room")).toBeNull();
+    expect(screen.getByText("Projector")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Board Room was deleted.");
+
+    const requests = vi.mocked(adminApi).mock.calls;
+    expect(requests.filter(([path]) => path === "/resources/")).toHaveLength(1);
+    expect(
+      requests.filter(([path]) => path === "/resources/1/constraints/"),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(([path]) => path === "/resources/2/constraints/"),
+    ).toHaveLength(1);
   });
 });

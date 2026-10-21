@@ -430,7 +430,17 @@ export function AdminResourcesPage() {
       );
       setResourceToDelete(null);
       setNotice(`${resourceToDelete.name} was deleted.`);
-      await loadResources();
+      setResources((current) =>
+        current.filter((resource) => resource.id !== resourceToDelete.id),
+      );
+      setConstraintsByResource((current) => {
+        const { [resourceToDelete.id]: _deleted, ...remaining } = current;
+        return remaining;
+      });
+      setAvailabilityErrors((current) => {
+        const { [resourceToDelete.id]: _deleted, ...remaining } = current;
+        return remaining;
+      });
     } catch (deleteError) {
       setError(
         deleteError instanceof Error ? deleteError.message : "Could not delete this resource.",
