@@ -85,6 +85,8 @@ User creation accepts only the roles defined by the user model. The role must be
 
 PostgreSQL is the application's default and intended database. The default connection target is database `resource_reservation_db`, role `resource_user`, host `127.0.0.1`, and port `5432`; set `DB_NAME`, `DB_USER`, `DB_HOST`, and `DB_PORT` to override those values. `DB_PASSWORD` is required and Django stops with a configuration error if it is missing. Incorrect credentials are reported by PostgreSQL when Django attempts to connect. `DB_SSLMODE` is also supported; the default is `require` for secure hosted databases. Set `DB_SSLMODE=disable` only for a local PostgreSQL installation that intentionally does not use SSL.
 
+PostgreSQL connections are reused by Django for up to 60 seconds and health-checked when reused. This avoids opening a new database connection for every request while allowing stale connections to be discarded. Each application worker keeps its own connection; this is connection reuse, not a connection pool. SQLite configuration is unchanged.
+
 Provide `DB_PASSWORD` through a private environment variable or a secret manager. Do not put database passwords in source files, commit them to Git, or assume that a `.env` file is loaded: this project reads process environment variables and does not load `.env` files. `.env` files are ignored by Git if you choose to maintain one locally. In production, configure all connection values and the password through the deployment platform's environment/secret settings.
 
 For example, in PowerShell, set the non-secret connection settings in the shell where Django will run:
