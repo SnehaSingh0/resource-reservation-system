@@ -190,6 +190,9 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 AUTH_USER_MODEL = "reservations.User"
+AUTHENTICATION_BACKENDS = [
+    "reservations.authentication.TimedModelBackend",
+]
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
