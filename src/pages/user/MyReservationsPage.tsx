@@ -173,12 +173,6 @@ export function MyReservationsPage() {
       />
 
       <section className="panel table-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Upcoming reservations</h2>
-          </div>
-        </div>
-
         {error && (
           <div className="inline-notice inline-notice-error" role="alert">
             {error}

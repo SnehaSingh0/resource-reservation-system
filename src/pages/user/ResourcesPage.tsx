@@ -80,6 +80,27 @@ const SLOT_MINUTES = 15;
 const HOUR_HEIGHT_PX = 64;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const SELECTED_RESOURCE_STORAGE_KEY = "resource-reservation.selected-resource";
+const RESERVATION_TIME_ZONE = "UTC";
+
+function getReservationClock() {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: RESERVATION_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(Date.now()))
+      .map(({ type, value }) => [type, value]),
+  );
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: Number(parts.hour) * 60 + Number(parts.minute),
+  };
+}
 
 function toDateKey(date: Date) {
   const year = date.getFullYear();
@@ -353,6 +374,18 @@ function validateRange(
   }
   if (endDate < startDate) {
     return "Choose an end date on or after the start date.";
+  }
+  const reservationClock = getReservationClock();
+  if (startDate < reservationClock.date) {
+    return "Reservations cannot be made for past dates.";
+  }
+  if (startDate === reservationClock.date) {
+    if (range.isFullDay) {
+      return "Full-day reservations must start on a future date.";
+    }
+    if (range.start <= reservationClock.minutes) {
+      return "Reservations for today must start at a future time.";
+    }
   }
 
   if (!resource.is_active) {
@@ -691,10 +724,10 @@ export function ResourcesPage() {
   >({});
   const [resourceId, setResourceId] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState(() =>
-    toDateKey(new Date()),
+    getReservationClock().date,
   );
-  const [startDate, setStartDate] = useState(() => toDateKey(new Date()));
-  const [endDate, setEndDate] = useState(() => toDateKey(new Date()));
+  const [startDate, setStartDate] = useState(() => getReservationClock().date);
+  const [endDate, setEndDate] = useState(() => getReservationClock().date);
   const [isFullDaySelected, setIsFullDaySelected] = useState(false);
   const [view, setView] = useState<CalendarView>("month");
   const [selectedRange, setSelectedRange] = useState<TimeRange | null>(null);
@@ -1630,7 +1663,7 @@ export function ResourcesPage() {
             <button
               className="button button-secondary calendar-today-button"
               type="button"
-              onClick={() => changeDate(toDateKey(new Date()))}
+              onClick={() => changeDate(getReservationClock().date)}
             >
               Today
             </button>

@@ -29,6 +29,12 @@ class ReservationBusinessRulesTests(TestCase):
         # each other.  The rate-limit test still verifies throttle behaviour
         # within its own execution.
         cache.clear()
+        self.reservation_today_patch = patch(
+            "reservations.services.timezone.localdate",
+            return_value=date(2024, 1, 1),
+        )
+        self.reservation_today_patch.start()
+        self.addCleanup(self.reservation_today_patch.stop)
         self.client = APIClient(enforce_csrf_checks=True)
         self.user = User.objects.create_user(
             username="user1",
@@ -476,6 +482,119 @@ class ReservationBusinessRulesTests(TestCase):
                 self.assertEqual(response.status_code, 400, response.data)
                 self.assertIn(error_field, response.data)
                 self.assertFalse(Reservation.objects.exists())
+
+    def test_reservation_api_rejects_past_dates_and_today_past_slots(self):
+        self.client.force_authenticate(user=self.user)
+        today = date(2025, 1, 15)
+        self.resource.default_start_time = time(0, 0)
+        self.resource.default_end_time = time(23, 59)
+        self.resource.save(update_fields=["default_start_time", "default_end_time"])
+
+        with (
+            patch("reservations.services.timezone.localdate", return_value=today),
+            patch(
+                "reservations.services.timezone.localtime",
+                return_value=datetime(2025, 1, 15, 10, 0),
+            ),
+        ):
+            past_response = self.client.post(
+                "/api/reservations/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-14",
+                    "start_time": "11:00",
+                    "end_time": "12:00",
+                },
+                format="json",
+            )
+            past_slot_response = self.client.post(
+                "/api/reservations/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-15",
+                    "start_time": "09:00",
+                    "end_time": "10:00",
+                },
+                format="json",
+            )
+            full_day_today_response = self.client.post(
+                "/api/reservations/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-15",
+                    "end_date": "2025-01-15",
+                    "is_full_day": True,
+                },
+                format="json",
+            )
+            today_future_slot_response = self.client.post(
+                "/api/reservations/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-15",
+                    "start_time": "10:15",
+                    "end_time": "11:00",
+                },
+                format="json",
+            )
+            future_response = self.client.post(
+                "/api/reservations/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-16",
+                    "start_time": "09:00",
+                    "end_time": "10:00",
+                },
+                format="json",
+            )
+
+        self.assertEqual(past_response.status_code, 400)
+        self.assertIn("past dates", past_response.data["detail"])
+        self.assertEqual(past_slot_response.status_code, 400)
+        self.assertIn("future time", past_slot_response.data["detail"])
+        self.assertEqual(full_day_today_response.status_code, 400)
+        self.assertIn("future date", full_day_today_response.data["detail"])
+        self.assertEqual(
+            today_future_slot_response.status_code,
+            201,
+            today_future_slot_response.data,
+        )
+        self.assertEqual(future_response.status_code, 201, future_response.data)
+
+    def test_reservation_update_cannot_move_reservation_into_the_past(self):
+        self.client.force_authenticate(user=self.user)
+        reservation = Reservation.objects.create(
+            user=self.user,
+            resource=self.resource,
+            reservation_date=date(2025, 1, 16),
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+        )
+        with (
+            patch(
+                "reservations.services.timezone.localdate",
+                return_value=date(2025, 1, 15),
+            ),
+            patch(
+                "reservations.services.timezone.localtime",
+                return_value=datetime(2025, 1, 15, 10, 0),
+            ),
+        ):
+            response = self.client.put(
+                f"/api/reservations/{reservation.id}/",
+                {
+                    "resource": self.resource.id,
+                    "reservation_date": "2025-01-14",
+                    "start_time": "14:00",
+                    "end_time": "16:00",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("past dates", response.data["detail"])
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.reservation_date, date(2025, 1, 16))
 
     def test_reservation_api_accepts_single_day_and_multi_day_dates(self):
         self.client.force_authenticate(user=self.user)

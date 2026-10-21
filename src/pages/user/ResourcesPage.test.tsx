@@ -129,11 +129,32 @@ async function chooseReservationDate(label: string, date: string) {
   fireEvent.click(dateButton);
 }
 
+function projectDateKey(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(date)
+      .map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function shiftDateKey(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 describe("ResourcesPage reservation form", () => {
   afterEach(() => {
     cleanup();
     invalidateCachedGets();
     window.sessionStorage.clear();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -227,6 +248,68 @@ describe("ResourcesPage reservation form", () => {
       expect(
         requests.filter(({ url }) => url.includes("/availability/")),
       ).toHaveLength(availabilityRequestsBeforeReservation + 1);
+    });
+  });
+
+  it("rejects past dates and past time slots today but allows a future slot today", async () => {
+    const today = projectDateKey();
+    const fixedNow = Date.parse(`${today}T12:00:00Z`);
+    vi.spyOn(Date, "now").mockReturnValue(fixedNow);
+    const requests = mockReservationApi([timedResource], {
+      [timedResource.id]: createConstraints(
+        timedResource.id,
+        [0, 1, 2, 3, 4, 5, 6],
+        false,
+      ),
+    });
+    renderResourcesPage();
+
+    await chooseReservationDate("Reserve date", shiftDateKey(today, -1));
+    fireEvent.click(screen.getByRole("button", { name: "Apply range" }));
+    expect(
+      await screen.findByText("Reservations cannot be made for past dates."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reserve" }).hasAttribute("disabled")).toBe(true);
+
+    await chooseReservationDate("Reserve date", today);
+    fireEvent.change(screen.getByLabelText("Start Time"), {
+      target: { value: "09:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End Time"), {
+      target: { value: "10:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply range" }));
+    expect(
+      await screen.findByText("Reservations for today must start at a future time."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reserve" }).hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Start Time"), {
+      target: { value: "13:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End Time"), {
+      target: { value: "14:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply range" }));
+    expect(screen.getByRole("button", { name: "Reserve" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Reserve" }));
+
+    await waitFor(() => {
+      expect(
+        requests.some(
+          ({ url, init }) => url.endsWith("/reservations/") && init?.method === "POST",
+        ),
+      ).toBe(true);
+    });
+    const createRequest = requests.find(
+      ({ url, init }) => url.endsWith("/reservations/") && init?.method === "POST",
+    );
+    expect(JSON.parse(String(createRequest?.init?.body))).toMatchObject({
+      reservation_date: today,
+      end_date: today,
+      start_time: "13:00",
+      end_time: "14:00",
+      is_full_day: false,
     });
   });
 

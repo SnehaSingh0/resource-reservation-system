@@ -86,6 +86,7 @@ describe("MyReservationsPage", () => {
 
     expect(await screen.findByText("Board Room")).toBeTruthy();
     expect(screen.queryByText("Previously Cancelled Room")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /upcoming reservations/i })).toBeNull();
     expect(screen.getByText("Jan 15, 2099 • 10:00–11:00")).toBeTruthy();
 
     const row = screen.getByText("Board Room").closest("tr");

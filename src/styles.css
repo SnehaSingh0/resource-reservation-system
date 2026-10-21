@@ -3580,9 +3580,33 @@ a:focus-visible {
 }
 
 @media (max-width: 640px) {
+  .calendar-step-buttons .icon-button,
+  .calendar-today-button {
+    min-height: 2.75rem;
+  }
+
+  .calendar-step-buttons .icon-button {
+    width: 2.75rem;
+  }
+
+  .calendar-today-button {
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+  }
+
   .reservation-calendar-page .reservation-resource-picker,
   .reservation-calendar-page .reservation-date-picker-trigger {
     min-height: 2.5rem;
+  }
+
+  .reservation-date-picker-header {
+    grid-template-columns: 2.75rem minmax(0, 1fr) 2.75rem;
+    gap: 0.25rem;
+  }
+
+  .reservation-date-picker-nav {
+    width: 2.75rem;
+    min-height: 2.75rem;
   }
 
   .reservation-date-picker-popover {
@@ -3590,6 +3614,6 @@ a:focus-visible {
   }
 
   .reservation-date-picker-day {
-    min-height: 2.1rem;
+    min-height: 2.5rem;
   }
 }

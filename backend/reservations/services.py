@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from .models import Reservation, Resource
 
@@ -203,6 +204,15 @@ def create_or_update_reservation(
 ):
     if reservation_date is None:
         raise ValueError("A reservation date is required.")
+
+    today = timezone.localdate()
+    if reservation_date < today:
+        raise ValueError("Reservations cannot be made for past dates.")
+    if reservation_date == today:
+        if is_full_day:
+            raise ValueError("Full-day reservations must start on a future date.")
+        if start_time is None or start_time <= timezone.localtime().time():
+            raise ValueError("Reservations for today must start at a future time.")
 
     resource = Resource.objects.select_for_update().get(id=resource_id)
 
