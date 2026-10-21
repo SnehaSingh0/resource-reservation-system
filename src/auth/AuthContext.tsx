@@ -10,6 +10,7 @@ import {
 import { Navigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../api/apiUrl";
 import { requireCsrfToken } from "../api/csrf";
+import { invalidateCachedGets } from "../api/requestCache";
 
 export type AuthUser = {
   id: number;
@@ -116,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const nextUser = responseBody.user as AuthUser;
+      invalidateCachedGets();
       setAuthError(null);
       setUser(nextUser);
       return nextUser;
@@ -187,6 +189,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             credentials: "include",
           });
           if (sessionResponse.status === 401 || sessionResponse.status === 403) {
+            invalidateCachedGets();
             setAuthError(null);
             setUser(null);
             return;
@@ -197,6 +200,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         throw new Error("Could not end your session. Please try again.");
       }
+      invalidateCachedGets();
       setAuthError(null);
       setUser(null);
     } catch (error) {

@@ -11,6 +11,7 @@ vi.mock("../../api/adminApi", () => ({
 
 type ReservationPayload = {
   id: number;
+  resource: number;
   user_email: string;
   resource_name: string;
   reservation_date: string;
@@ -23,6 +24,7 @@ type ReservationPayload = {
 
 const confirmedReservation: ReservationPayload = {
   id: 1,
+  resource: 7,
   user_email: "active@example.com",
   resource_name: "Board Room",
   reservation_date: "2099-01-15",

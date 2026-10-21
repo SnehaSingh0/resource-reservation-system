@@ -4,9 +4,12 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge, type Status } from "../../components/StatusBadge";
 import { formatReservationTimeline } from "../../utils/reservationTimeline";
+import { apiUrl } from "../../api/apiUrl";
+import { invalidateCachedGets } from "../../api/requestCache";
 
 type Reservation = {
   id: number;
+  resource: number;
   user_email: string;
   resource_name: string;
   reservation_date: string;
@@ -69,6 +72,9 @@ export function AdminReservationsPage() {
         `/admin/reservations/${reservationToCancel.id}/`,
         { method: "DELETE" },
         "Could not cancel this reservation.",
+      );
+      invalidateCachedGets(
+        apiUrl(`/resources/${reservationToCancel.resource}/availability/`),
       );
       setReservationToCancel(null);
       setNotice(`Reservation ${reservationToCancel.id} was cancelled and removed.`);

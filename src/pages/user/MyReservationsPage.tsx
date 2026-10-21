@@ -5,12 +5,14 @@ import { PageHeading } from "../../components/PageHeading";
 import { StatusBadge } from "../../components/StatusBadge";
 import { apiUrl } from "../../api/apiUrl";
 import { requireCsrfToken } from "../../api/csrf";
+import { cachedGet, invalidateCachedGets } from "../../api/requestCache";
 import { formatReservationTimeline } from "../../utils/reservationTimeline";
 
 type BookingStatus = "Confirmed" | "Pending";
 
 type Booking = {
   id: number | string;
+  resourceId: number;
   resource: string;
   timeline: string;
   status: BookingStatus;
@@ -48,27 +50,34 @@ export function MyReservationsPage() {
     setError("");
 
     try {
-      const response = await fetch(apiUrl("/reservations/"), {
-        credentials: "include",
-      });
+      const reservationsUrl = apiUrl("/reservations/");
+      const payload = await cachedGet(
+        `${user?.id}:${reservationsUrl}`,
+        async () => {
+          const response = await fetch(reservationsUrl, {
+            credentials: "include",
+          });
 
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          throw new Error("Please sign in to view your reservations.");
-        }
-        throw new Error("Could not load your reservations from the server.");
-      }
+          if (!response.ok) {
+            if (response.status === 401 || response.status === 403) {
+              throw new Error("Please sign in to view your reservations.");
+            }
+            throw new Error("Could not load your reservations from the server.");
+          }
 
-      const payload = (await response.json()) as Array<{
-        id: number;
-        resource_name: string;
-        reservation_date: string;
-        end_date?: string | null;
-        start_time: string | null;
-        end_time: string | null;
-        is_full_day: boolean;
-        status: string;
-      }>;
+          return (await response.json()) as Array<{
+            id: number;
+            resource: number;
+            resource_name: string;
+            reservation_date: string;
+            end_date?: string | null;
+            start_time: string | null;
+            end_time: string | null;
+            is_full_day: boolean;
+            status: string;
+          }>;
+        },
+      );
 
       const nextBookings: Booking[] = (Array.isArray(payload) ? payload : [])
         .filter((reservation) => {
@@ -87,6 +96,7 @@ export function MyReservationsPage() {
             reservation.status === "PENDING" ? "Pending" : "Confirmed";
           return {
             id: reservation.id,
+            resourceId: reservation.resource,
             resource: reservation.resource_name,
             timeline: formatReservationTimeline(reservation),
             status: normalizedStatus,
@@ -132,6 +142,12 @@ export function MyReservationsPage() {
         throw new Error(payload.detail || "Could not cancel this reservation.");
       }
 
+      invalidateCachedGets(
+        apiUrl("/reservations/"),
+        `:${apiUrl("/reservations/")}`,
+        apiUrl("/admin/reservations/"),
+        apiUrl(`/resources/${bookingToCancel.resourceId}/availability/`),
+      );
       setBookings((current) =>
         current.filter((booking) => booking.id !== bookingToCancel.id),
       );

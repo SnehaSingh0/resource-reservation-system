@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { invalidateCachedGets } from "../../api/requestCache";
 import { ResourcesPage } from "./ResourcesPage";
 
 vi.mock("../../auth/AuthContext", () => ({
@@ -130,8 +132,37 @@ async function chooseReservationDate(label: string, date: string) {
 describe("ResourcesPage reservation form", () => {
   afterEach(() => {
     cleanup();
+    invalidateCachedGets();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("deduplicates initial resource and availability requests under StrictMode", async () => {
+    const requests = mockReservationApi([timedResource], {
+      [timedResource.id]: createConstraints(
+        timedResource.id,
+        [0, 1, 2, 3, 4, 5, 6],
+        false,
+      ),
+    });
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <ResourcesPage />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByLabelText("Reserve date")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        requests.filter(({ url }) => url.includes("/availability/")),
+      ).toHaveLength(1);
+    });
+    expect(requests.filter(({ url }) => url.endsWith("/resources/"))).toHaveLength(1);
+    expect(
+      requests.filter(({ url }) => url.endsWith("/resources/10/constraints/")),
+    ).toHaveLength(1);
   });
 
   it("shows one date and only start/end time fields for a timed single-day resource", async () => {
@@ -167,6 +198,12 @@ describe("ResourcesPage reservation form", () => {
     await chooseReservationDate("Reserve From", "2026-10-30");
     await chooseReservationDate("Reserve Until", "2026-11-01");
     fireEvent.click(screen.getByRole("button", { name: "Apply range" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Updating availability…")).toBeNull();
+    });
+    const availabilityRequestsBeforeReservation = requests.filter(({ url }) =>
+      url.includes("/availability/"),
+    ).length;
     fireEvent.click(screen.getByRole("button", { name: "Reserve" }));
 
     await waitFor(() => {
@@ -186,6 +223,11 @@ describe("ResourcesPage reservation form", () => {
       is_full_day: true,
     });
     expect(await screen.findByText(/reserved all day for/)).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        requests.filter(({ url }) => url.includes("/availability/")),
+      ).toHaveLength(availabilityRequestsBeforeReservation + 1);
+    });
   });
 
   it("submits a permitted multi-day timed reservation using the selected boundary times", async () => {
@@ -384,7 +426,11 @@ describe("ResourcesPage reservation form", () => {
     const restoredResource = await screen.findByLabelText("Resource") as HTMLSelectElement;
     await screen.findByLabelText("Reserve Until");
     expect(restoredResource.value).toBe(String(fullDayResource.id));
-    expect(requests.filter(({ url }) => url.endsWith("/resources/")).length).toBe(2);
+    expect(requests.filter(({ url }) => url.endsWith("/resources/")).length).toBe(1);
+    expect(
+      requests.filter(({ url }) => /\/resources\/\d+\/constraints\/$/.test(url)),
+    ).toHaveLength(2);
+    expect(requests.filter(({ url }) => url.includes("/availability/"))).toHaveLength(3);
   });
 
   it("falls back to an available resource when the saved selection no longer exists", async () => {

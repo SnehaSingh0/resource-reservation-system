@@ -14,6 +14,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { PageHeading } from "../../components/PageHeading";
 import { apiUrl } from "../../api/apiUrl";
 import { requireCsrfToken } from "../../api/csrf";
+import { cachedGet, invalidateCachedGets } from "../../api/requestCache";
 
 type Resource = {
   id: number;
@@ -710,12 +711,6 @@ export function ResourcesPage() {
   const [loadError, setError] = useState("");
   const dragRef = useRef<DragRange | null>(null);
   const ignoreClickRef = useRef(false);
-  const constraintsCacheRef = useRef(
-    new Map<number, {
-      expiresAt: number;
-      promise: Promise<AvailabilityConstraint[]>;
-    }>(),
-  );
 
   const resource = resourceId ? getResourceById(resourceId, resources) : undefined;
   const selectedDateObject = fromDateKey(selectedDate);
@@ -768,14 +763,20 @@ export function ResourcesPage() {
       setLoading(true);
       setError("");
       try {
-        const response = await fetch(apiUrl("/resources/"), {
-          credentials: "include",
-        });
-        if (!response.ok) {
-          throw new Error("Could not load resources from the server.");
-        }
-
-        const payload = (await response.json()) as Resource[];
+        const resourcesUrl = apiUrl("/resources/");
+        const payload = await cachedGet(
+          resourcesUrl,
+          async () => {
+            const response = await fetch(resourcesUrl, {
+              credentials: "include",
+            });
+            if (!response.ok) {
+              throw new Error("Could not load resources from the server.");
+            }
+            return (await response.json()) as Resource[];
+          },
+          15_000,
+        );
         const activeResources = (Array.isArray(payload) ? payload : []).filter(
           (item) => item.is_active,
         );
@@ -833,21 +834,23 @@ export function ResourcesPage() {
       start_date: startDate,
       end_date: endDate,
     });
+    const availabilityUrl = apiUrl(
+      `/resources/${selectedResource.id}/availability/?${dateQuery.toString()}`,
+    );
 
     async function loadSelectedResourceAvailability() {
       setAvailabilityLoading(true);
       setError("");
 
       try {
-        const cache = constraintsCacheRef.current;
-        const cached = cache.get(selectedResource.id);
-        let constraintsPromise = cached && cached.expiresAt > Date.now()
-          ? cached.promise
-          : undefined;
-        if (!constraintsPromise) {
-          constraintsPromise = (async () => {
+        const constraintsUrl = apiUrl(
+          `/resources/${selectedResource.id}/constraints/`,
+        );
+        const constraintsPromise = cachedGet(
+          constraintsUrl,
+          async () => {
             const response = await fetch(
-              apiUrl(`/resources/${selectedResource.id}/constraints/`),
+              constraintsUrl,
               { credentials: "include" },
             );
             if (!response.ok) {
@@ -856,41 +859,35 @@ export function ResourcesPage() {
               );
             }
             return (await response.json()) as AvailabilityConstraint[];
-          })();
-          cache.set(selectedResource.id, {
-            expiresAt: Date.now() + 60_000,
-            promise: constraintsPromise,
-          });
-        }
-        const availabilityPromise = fetch(
-          apiUrl(
-            `/resources/${selectedResource.id}/availability/?${dateQuery.toString()}`,
-          ),
-          { credentials: "include" },
+          },
+          60_000,
         );
-        let constraints: AvailabilityConstraint[];
-        try {
-          constraints = await constraintsPromise;
-        } catch (constraintsError) {
-          if (cache.get(selectedResource.id)?.promise === constraintsPromise) {
-            cache.delete(selectedResource.id);
-          }
-          throw constraintsError;
-        }
-        const availabilityResponse = await availabilityPromise;
-        if (!availabilityResponse.ok) {
-          throw new Error(`Could not load reservations for ${selectedResource.name}.`);
-        }
-
-        const availability = (await availabilityResponse.json()) as {
-          bookings: Array<{
-            date: string;
-            start_time: string | null;
-            end_time: string | null;
-            is_full_day: boolean;
-            status: "CONFIRMED" | "PENDING" | "CANCELLED";
-          }>;
-        };
+        const availabilityPromise = cachedGet(
+          availabilityUrl,
+          async () => {
+            const response = await fetch(availabilityUrl, {
+              credentials: "include",
+            });
+            if (!response.ok) {
+              throw new Error(
+                `Could not load reservations for ${selectedResource.name}.`,
+              );
+            }
+            return (await response.json()) as {
+              bookings: Array<{
+                date: string;
+                start_time: string | null;
+                end_time: string | null;
+                is_full_day: boolean;
+                status: "CONFIRMED" | "PENDING" | "CANCELLED";
+              }>;
+            };
+          },
+        );
+        const [constraints, availability] = await Promise.all([
+          constraintsPromise,
+          availabilityPromise,
+        ]);
         if (!active) return;
 
         setConstraintsByResource((current) => ({
@@ -1284,6 +1281,12 @@ export function ResourcesPage() {
         throw new Error(backendMessage);
       }
 
+      invalidateCachedGets(
+        apiUrl("/reservations/"),
+        `:${apiUrl("/reservations/")}`,
+        apiUrl("/admin/reservations/"),
+        apiUrl(`/resources/${resource.id}/availability/`),
+      );
       setAvailabilityRevision((current) => current + 1);
       const reservationStartDate = selectedRange.startDate ?? selectedRange.date;
       const reservationEndDate = selectedRange.endDate ?? selectedRange.date;

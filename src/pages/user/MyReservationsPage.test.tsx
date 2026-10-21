@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invalidateCachedGets } from "../../api/requestCache";
 import { MyReservationsPage } from "./MyReservationsPage";
 
 vi.mock("../../auth/AuthContext", () => ({
@@ -12,6 +14,7 @@ vi.mock("../../auth/AuthContext", () => ({
 describe("MyReservationsPage", () => {
   afterEach(() => {
     cleanup();
+    invalidateCachedGets();
     vi.unstubAllGlobals();
   });
 
@@ -47,6 +50,7 @@ describe("MyReservationsPage", () => {
               ...(targetExists
                 ? [{
                 id: 3,
+                resource: 1,
                 resource_name: "Board Room",
                 reservation_date: "2099-01-15",
                 end_date: null,
@@ -58,6 +62,7 @@ describe("MyReservationsPage", () => {
                 : []),
               {
                 id: 4,
+                resource: 2,
                 resource_name: "Previously Cancelled Room",
                 reservation_date: "2099-01-16",
                 start_time: "11:00:00",
@@ -73,7 +78,11 @@ describe("MyReservationsPage", () => {
       }),
     );
 
-    render(<MyReservationsPage />);
+    render(
+      <StrictMode>
+        <MyReservationsPage />
+      </StrictMode>,
+    );
 
     expect(await screen.findByText("Board Room")).toBeTruthy();
     expect(screen.queryByText("Previously Cancelled Room")).toBeNull();
@@ -92,5 +101,10 @@ describe("MyReservationsPage", () => {
       "Reservation cancelled and permanently removed.",
     );
     expect(targetExists).toBe(false);
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([input, init]) =>
+        String(input).includes("/reservations/") && init?.method !== "DELETE",
+      ),
+    ).toHaveLength(1);
   });
 });
