@@ -4,7 +4,9 @@ import logging
 import re
 import traceback
 from datetime import time, timedelta
+from time import perf_counter_ns
 
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import validate_email
@@ -37,6 +39,7 @@ from .throttles import LoginIPRateThrottle, LoginRateThrottle
 
 UserModel = get_user_model()
 logger = logging.getLogger(__name__)
+timing_logger = logging.getLogger("reservations.request_timing")
 
 _MISSING_TABLE = re.compile(r'relation "([^"]+)" does not exist')
 _MISSING_COLUMN = re.compile(r'column "([^"]+)" does not exist')
@@ -145,13 +148,33 @@ class LoginView(APIView):
         if not isinstance(email, str) or not isinstance(password, str):
             return Response({"detail": "Email and password are required."}, status=400)
         try:
-            user = authenticate(request, email=email, password=password)
+            if settings.REQUEST_TIMING_ENABLED:
+                started_at = perf_counter_ns()
+                try:
+                    user = authenticate(request, email=email, password=password)
+                finally:
+                    timing_logger.info(
+                        "login_phase=authenticate duration_ms=%.2f",
+                        (perf_counter_ns() - started_at) / 1_000_000,
+                    )
+            else:
+                user = authenticate(request, email=email, password=password)
             if user is None:
                 return Response(
                     {"detail": "Invalid credentials."},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
-            login(request, user)
+            if settings.REQUEST_TIMING_ENABLED:
+                started_at = perf_counter_ns()
+                try:
+                    login(request, user)
+                finally:
+                    timing_logger.info(
+                        "login_phase=login duration_ms=%.2f",
+                        (perf_counter_ns() - started_at) / 1_000_000,
+                    )
+            else:
+                login(request, user)
             return Response(
                 {"detail": "Login successful.", "user": UserSerializer(user).data}
             )
