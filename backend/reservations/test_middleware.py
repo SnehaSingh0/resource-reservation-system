@@ -63,6 +63,40 @@ class RequestTimingMiddlewareTests(SimpleTestCase):
 
 class RequestTimingSqlMiddlewareTests(TestCase):
     @override_settings(REQUEST_TIMING_ENABLED=True)
+    def test_logs_each_resource_sql_duration_without_values(self):
+        from django.db import connection
+
+        request = RequestFactory().get("/api/resources/")
+        request.resolver_match = resolve("/api/resources/")
+
+        def get_response(_request):
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT %s, 'inline-secret', 123",
+                    ["sql-parameter-secret"],
+                )
+                cursor.execute("SELECT 2")
+            return HttpResponse("response")
+
+        middleware = RequestTimingMiddleware(get_response)
+        with self.assertLogs("reservations.request_timing", level="INFO") as captured:
+            middleware(request)
+
+        query_logs = [
+            log_line for log_line in captured.output if "sql_query=" in log_line
+        ]
+        self.assertEqual(len(query_logs), 2)
+        self.assertRegex(query_logs[0], r"sql_query=1 sql_duration_ms=\d+\.\d{2}")
+        self.assertIn("sql=SELECT %s, ?, ?", query_logs[0])
+        self.assertRegex(query_logs[1], r"sql_query=2 sql_duration_ms=\d+\.\d{2}")
+        self.assertIn("sql=SELECT ?", query_logs[1])
+        aggregate_log = captured.output[-1]
+        self.assertIn("sql_query_count=2", aggregate_log)
+        self.assertRegex(aggregate_log, r"sql_duration_ms=\d+\.\d{2}")
+        for sensitive_value in ("sql-parameter-secret", "inline-secret", "123"):
+            self.assertNotIn(sensitive_value, "\n".join(captured.output))
+
+    @override_settings(REQUEST_TIMING_ENABLED=True)
     def test_logs_aggregate_sql_timing_without_sql_or_parameters(self):
         from django.db import connection
 
@@ -82,6 +116,7 @@ class RequestTimingSqlMiddlewareTests(TestCase):
         self.assertIn("sql_query_count=1", log_line)
         self.assertRegex(log_line, r"sql_duration_ms=\d+\.\d{2}")
         self.assertIn("duration_ms=", log_line)
+        self.assertNotIn("sql_query=", log_line)
         for sensitive_value in ("SELECT", "sql-parameter-secret", "query-secret"):
             self.assertNotIn(sensitive_value, log_line)
 
