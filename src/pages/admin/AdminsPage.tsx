@@ -93,18 +93,18 @@ export function AdminsPage() {
             <h2>Admins</h2>
           </div>
         </div>
-        <div className="table-scroll" role="region" aria-label="Admins table" tabIndex={0}>
-          <table className="data-table">
+        <div className="table-scroll admin-mobile-card-table-scroll" role="region" aria-label="Admins table" tabIndex={0}>
+          <table className="data-table admin-mobile-card-table">
             <thead>
               <tr><th scope="col">User</th><th scope="col">Email address</th><th scope="col">Role</th><th scope="col">Actions</th></tr>
             </thead>
             <tbody>
               {!loading && admins.map((managedAdmin) => (
                 <tr key={managedAdmin.id}>
-                  <td><strong>{adminName(managedAdmin)}</strong></td>
-                  <td>{managedAdmin.email}</td>
-                  <td><span className="role-chip">Admin</span></td>
-                  <td>
+                  <td data-label="User"><strong>{adminName(managedAdmin)}</strong></td>
+                  <td data-label="Email address">{managedAdmin.email}</td>
+                  <td data-label="Role"><span className="role-chip">Admin</span></td>
+                  <td data-label="Actions">
                     <div className="table-actions">
                     <Link
                       className="table-action"

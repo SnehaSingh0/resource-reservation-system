@@ -102,8 +102,8 @@ export function AdminReservationsPage() {
             <h2>Active reservations</h2>
           </div>
         </div>
-        <div className="table-scroll" role="region" aria-label="Reservations table" tabIndex={0}>
-          <table className="data-table">
+        <div className="table-scroll admin-mobile-card-table-scroll" role="region" aria-label="Reservations table" tabIndex={0}>
+          <table className="data-table admin-mobile-card-table">
             <thead>
               <tr>
                 <th scope="col">User</th><th scope="col">Resource</th><th scope="col">Reservation</th>
@@ -114,11 +114,11 @@ export function AdminReservationsPage() {
               {!loading && reservations.map((reservation) => {
                 return (
                   <tr key={reservation.id}>
-                    <td><strong>{reservation.user_email}</strong></td>
-                    <td>{reservation.resource_name}</td>
-                    <td>{formatReservationTimeline(reservation)}</td>
-                    <td><StatusBadge status={displayStatus(reservation.status)} /></td>
-                    <td>
+                    <td data-label="User"><strong>{reservation.user_email}</strong></td>
+                    <td data-label="Resource">{reservation.resource_name}</td>
+                    <td data-label="Reservation">{formatReservationTimeline(reservation)}</td>
+                    <td data-label="Status"><StatusBadge status={displayStatus(reservation.status)} /></td>
+                    <td data-label="Action">
                       {reservation.status !== "CANCELLED" ? (
                         <button
                           className="table-action table-action-danger"

@@ -489,8 +489,8 @@ export function AdminResourcesPage() {
             <p>{loading ? "Loading…" : `${resources.length} resources`}</p>
           </div>
         </div>
-        <div className="table-scroll" role="region" aria-label="Resources table" tabIndex={0}>
-          <table className="data-table">
+        <div className="table-scroll admin-mobile-card-table-scroll" role="region" aria-label="Resources table" tabIndex={0}>
+          <table className="data-table admin-mobile-card-table">
             <thead>
               <tr>
                 <th scope="col">Resource</th>
@@ -504,13 +504,13 @@ export function AdminResourcesPage() {
             <tbody>
               {!loading && resources.map((resource) => (
                 <tr key={resource.id}>
-                  <td>
+                  <td data-label="Resource">
                     <strong>{resource.name}</strong>
                     <small className="table-subtext">{resource.description}</small>
                   </td>
-                  <td>{resource.resource_type}</td>
-                  <td>{resource.location || "—"}</td>
-                  <td className="availability-cell">
+                  <td data-label="Type">{resource.resource_type}</td>
+                  <td data-label="Location">{resource.location || "—"}</td>
+                  <td className="availability-cell" data-label="Availability">
                     <span className="availability-summary">
                       {availabilityErrors[resource.id] ??
                         formatAvailability(
@@ -520,13 +520,13 @@ export function AdminResourcesPage() {
                         )}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <span className={`status-badge status-${resource.is_active ? "active" : "inactive"}`}>
                       <span className="status-dot" aria-hidden="true" />
                       {resource.is_active ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Actions">
                     <div className="table-actions">
                       <Link
                         className="table-action"

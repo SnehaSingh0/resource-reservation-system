@@ -105,6 +105,11 @@ describe("AdminResourcesPage", () => {
     resolveResources(resources);
 
     const boardRoomRow = await screen.findByRole("row", { name: /Board Room/ });
+    expect(
+      Array.from(boardRoomRow.querySelectorAll("td"), (cell) =>
+        cell.getAttribute("data-label"),
+      ),
+    ).toEqual(["Resource", "Type", "Location", "Availability", "Status", "Actions"]);
     expect(boardRoomRow.textContent).toContain("09:00 – 12:00");
     expect(boardRoomRow.textContent).not.toContain("13:00 – 17:00");
 

@@ -3989,3 +3989,172 @@ a:focus-visible {
     justify-self: start;
   }
 }
+
+@media (max-width: 700px) {
+  .admin-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(0.4rem, 2vw, 0.6rem);
+  }
+
+  .admin-metric-card {
+    min-width: 0;
+    min-height: 5.2rem;
+    gap: 0.5rem;
+    padding: clamp(0.55rem, 2.5vw, 0.75rem);
+    overflow-wrap: anywhere;
+  }
+
+  .admin-metric-card span {
+    line-height: 1.3;
+  }
+
+  .admin-metric-card strong {
+    font-size: clamp(1.15rem, 5vw, 1.4rem);
+  }
+
+  .admin-quick-links {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-quick-links .button {
+    min-width: 0;
+    min-height: 2.75rem;
+    justify-content: flex-start;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-quick-links .button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .admin-mobile-card-table-scroll {
+    overflow: visible;
+  }
+
+  .admin-mobile-card-table {
+    display: block;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .admin-mobile-card-table-scroll .admin-mobile-card-table,
+  .my-reservations-table-scroll .my-reservations-table {
+    min-width: 0;
+  }
+
+  .admin-mobile-card-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  .admin-mobile-card-table tbody {
+    display: grid;
+    gap: 0.55rem;
+    padding: 0.6rem;
+  }
+
+  .admin-mobile-card-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    min-width: 0;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #e3e8ed;
+    border-radius: 0.4rem;
+    background: #fff;
+  }
+
+  .admin-mobile-card-table tbody td {
+    min-width: 0;
+    padding: 0.42rem 0;
+    border-top: 0;
+    border-bottom: 1px solid #eef1f4;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-mobile-card-table tbody td::before {
+    display: block;
+    margin-bottom: 0.15rem;
+    color: #7a8796;
+    content: attr(data-label);
+    font-size: 0.61rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .admin-mobile-card-table tbody td:last-child {
+    border-bottom: 0;
+  }
+
+  .admin-mobile-card-table .availability-cell {
+    height: auto;
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .admin-mobile-card-table .availability-summary,
+  .admin-mobile-card-table .availability-uniform-summary,
+  .admin-mobile-card-table .availability-full-day-summary {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-mobile-card-table .table-actions {
+    gap: 0.25rem 0.65rem;
+  }
+
+  .admin-mobile-card-table .table-action {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    padding-inline: 0.25rem;
+  }
+
+  .admin-mobile-card-table .empty-table {
+    padding: 0.65rem !important;
+    border: 0;
+    text-align: center;
+  }
+
+  .admin-page-content .form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  }
+
+  .admin-page-content .weekly-availability-table {
+    overscroll-behavior-x: contain;
+  }
+
+  .admin-page-content .confirm-dialog {
+    width: min(100%, 26rem);
+    max-height: calc(100dvh - max(1.2rem, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    padding: clamp(0.8rem, 3vw, 1rem);
+  }
+}
+
+@media (max-width: 380px) {
+  .admin-quick-links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-quick-links .button:last-child {
+    grid-column: auto;
+  }
+
+  .admin-page-content .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .my-reservations-table tbody {
+    padding: 0.5rem;
+  }
+}

@@ -57,6 +57,13 @@ describe("AdminReservationsPage", () => {
     expect(screen.queryByText("cancelled@example.com")).toBeNull();
     expect(screen.getByText("Confirmed")).toBeTruthy();
     expect(screen.queryByText("Cancelled")).toBeNull();
+    const reservationRow = screen.getByText("active@example.com").closest("tr");
+    expect(
+      Array.from(
+        reservationRow?.querySelectorAll("td") ?? [],
+        (cell) => cell.getAttribute("data-label"),
+      ),
+    ).toEqual(["User", "Resource", "Reservation", "Status", "Action"]);
     expect(screen.getByRole("heading", { name: "Active reservations" })).toBeTruthy();
     expect(screen.queryByText("Cancellation History")).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Filter reservations by status" })).toBeNull();

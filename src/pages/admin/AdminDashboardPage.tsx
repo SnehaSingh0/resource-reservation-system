@@ -160,8 +160,8 @@ export function AdminDashboardPage() {
             Loading administration data…
           </div>
         ) : (
-          <div className="table-scroll" role="region" aria-label="Recent reservations table" tabIndex={0}>
-            <table className="data-table">
+          <div className="table-scroll admin-mobile-card-table-scroll" role="region" aria-label="Recent reservations table" tabIndex={0}>
+            <table className="data-table admin-mobile-card-table">
               <thead>
                 <tr>
                   <th scope="col">User</th>
@@ -173,10 +173,10 @@ export function AdminDashboardPage() {
               <tbody>
                 {recentReservations.map((reservation) => (
                   <tr key={reservation.id}>
-                    <td><strong>{reservation.user_email}</strong></td>
-                    <td>{reservation.resource_name}</td>
-                    <td>{formatReservationTimeline(reservation)}</td>
-                    <td><StatusBadge status={displayStatus(reservation.status)} /></td>
+                    <td data-label="User"><strong>{reservation.user_email}</strong></td>
+                    <td data-label="Resource">{reservation.resource_name}</td>
+                    <td data-label="Reservation">{formatReservationTimeline(reservation)}</td>
+                    <td data-label="Status"><StatusBadge status={displayStatus(reservation.status)} /></td>
                   </tr>
                 ))}
                 {recentReservations.length === 0 && (

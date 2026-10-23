@@ -79,6 +79,15 @@ describe("AdminDashboardPage", () => {
     const table = await screen.findByRole("region", { name: "Recent reservations table" });
 
     expect(within(table).getByText("active-one@example.com")).toBeTruthy();
+    const reservationRow = within(table)
+      .getByText("active-one@example.com")
+      .closest("tr");
+    expect(
+      Array.from(
+        reservationRow?.querySelectorAll("td") ?? [],
+        (cell) => cell.getAttribute("data-label"),
+      ),
+    ).toEqual(["User", "Resource", "Reservation", "Status"]);
     expect(within(table).getByText("active-two@example.com")).toBeTruthy();
     expect(within(table).getByText("active-three@example.com")).toBeTruthy();
     expect(within(table).queryByText("cancelled@example.com")).toBeNull();

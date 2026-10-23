@@ -60,6 +60,13 @@ describe("administrator account management", () => {
     expect(screen.getAllByRole("link", { name: "Edit" })[1].getAttribute("href")).toContain(
       "/admin/admins/edit?adminId=2",
     );
+    const adminRow = screen.getByText("second@example.com").closest("tr");
+    expect(
+      Array.from(
+        adminRow?.querySelectorAll("td") ?? [],
+        (cell) => cell.getAttribute("data-label"),
+      ),
+    ).toEqual(["User", "Email address", "Role", "Actions"]);
   });
 
   it("edits safe admin details without presenting role or password controls", async () => {
