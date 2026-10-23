@@ -91,6 +91,9 @@ describe("MyReservationsPage", () => {
 
     const row = screen.getByText("Board Room").closest("tr");
     if (!row) throw new Error("Reservation row was not rendered.");
+    expect(
+      Array.from(row.querySelectorAll("td"), (cell) => cell.getAttribute("data-label")),
+    ).toEqual(["Resource", "Reservation", "Status", "Actions"]);
     fireEvent.click(within(row).getByRole("button", { name: "Cancel" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel booking" }));
 

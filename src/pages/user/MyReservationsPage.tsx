@@ -167,7 +167,7 @@ export function MyReservationsPage() {
   }
 
   return (
-    <div className="content-stack">
+    <div className="content-stack my-reservations-page">
       <PageHeading
         title="My Reservations"
       />
@@ -189,8 +189,8 @@ export function MyReservationsPage() {
             Loading your reservations…
           </div>
         ) : (
-          <div className="table-scroll" role="region" aria-label="My reservations table" tabIndex={0}>
-            <table className="data-table">
+          <div className="table-scroll my-reservations-table-scroll" role="region" aria-label="My reservations table" tabIndex={0}>
+            <table className="data-table my-reservations-table">
               <thead>
                 <tr>
                   <th scope="col">Resource</th>
@@ -202,14 +202,14 @@ export function MyReservationsPage() {
               <tbody>
                 {bookings.map((booking) => (
                   <tr key={String(booking.id)}>
-                    <td>
+                    <td data-label="Resource">
                       <strong>{booking.resource}</strong>
                     </td>
-                    <td>{booking.timeline}</td>
-                    <td>
+                    <td data-label="Reservation">{booking.timeline}</td>
+                    <td data-label="Status">
                       <StatusBadge status={booking.status} />
                     </td>
-                    <td>
+                    <td data-label="Actions">
                       <button
                         className="table-action table-action-danger"
                         type="button"

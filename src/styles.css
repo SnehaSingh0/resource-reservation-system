@@ -3786,3 +3786,206 @@ a:focus-visible {
     padding: 0.15rem 0.05rem;
   }
 }
+
+.admin-app-shell,
+.admin-main,
+.admin-page-content,
+.my-reservations-page,
+.admin-page-content .table-scroll,
+.my-reservations-table-scroll {
+  min-width: 0;
+}
+
+.admin-metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+}
+
+.admin-page-content .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+}
+
+.admin-page-content .table-scroll,
+.my-reservations-table-scroll {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.admin-page-content .table-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-page-content .inline-notice,
+.admin-page-content .availability-summary {
+  overflow-wrap: anywhere;
+}
+
+.availability-details-popover {
+  max-height: calc(100dvh - 1.5rem);
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 700px) {
+  .admin-page-content {
+    padding: clamp(0.65rem, 2.5vw, 0.9rem);
+  }
+
+  .admin-page-content .table-scroll {
+    overflow-x: auto;
+  }
+
+  .admin-page-content .availability-cell {
+    height: auto;
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .admin-page-content .availability-summary,
+  .admin-page-content .availability-uniform-summary,
+  .admin-page-content .availability-full-day-summary {
+    max-width: 24rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-page-content .table-actions {
+    gap: 0.25rem 0.65rem;
+  }
+
+  .admin-page-content .table-action {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    padding-inline: 0.2rem;
+  }
+
+  .admin-page-content .weekly-availability-table {
+    max-width: 100%;
+  }
+
+  .admin-page-content .dialog-backdrop {
+    padding:
+      max(0.6rem, env(safe-area-inset-top))
+      max(0.6rem, env(safe-area-inset-right))
+      max(0.6rem, env(safe-area-inset-bottom))
+      max(0.6rem, env(safe-area-inset-left));
+  }
+
+  .admin-page-content .confirm-dialog {
+    max-height: calc(100dvh - 1.2rem);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+}
+
+@media (max-width: 700px) {
+  .my-reservations-table-scroll {
+    overflow: visible;
+  }
+
+  .my-reservations-table {
+    display: block;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .my-reservations-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  .my-reservations-table tbody {
+    display: grid;
+    gap: 0.65rem;
+    padding: 0.65rem;
+  }
+
+  .my-reservations-table tbody tr {
+    display: grid;
+    grid-template:
+      "resource status" auto
+      "reservation actions" auto
+      / minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #e3e8ed;
+    border-radius: 0.4rem;
+    background: #fff;
+  }
+
+  .my-reservations-table tbody td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    color: #4f5d70;
+    font-size: 0.78rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .my-reservations-table tbody td::before {
+    display: block;
+    margin-bottom: 0.18rem;
+    color: #7a8796;
+    content: attr(data-label);
+    font-size: 0.62rem;
+    font-weight: 650;
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+  }
+
+  .my-reservations-table tbody td:nth-child(1) {
+    grid-area: resource;
+  }
+
+  .my-reservations-table tbody td:nth-child(2) {
+    grid-area: reservation;
+  }
+
+  .my-reservations-table tbody td:nth-child(3) {
+    grid-area: status;
+    justify-self: end;
+  }
+
+  .my-reservations-table tbody td:nth-child(4) {
+    grid-area: actions;
+    justify-self: end;
+  }
+
+  .my-reservations-table .table-action {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    padding-inline: 0.55rem;
+  }
+
+  .my-reservations-table .empty-table {
+    grid-column: 1 / -1;
+    padding: 0.75rem !important;
+    text-align: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .my-reservations-table tbody tr {
+    grid-template:
+      "resource" auto
+      "status" auto
+      "reservation" auto
+      "actions" auto
+      / minmax(0, 1fr);
+  }
+
+  .my-reservations-table tbody td:nth-child(3),
+  .my-reservations-table tbody td:nth-child(4) {
+    justify-self: start;
+  }
+}
