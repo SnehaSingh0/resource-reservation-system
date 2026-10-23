@@ -1390,6 +1390,37 @@ export function ResourcesPage() {
         tabIndex={0}
         aria-busy={availabilityLoading}
       >
+        {dates.length > 1 && (
+          <div className="week-date-picker" role="group" aria-label="Choose a day in this week">
+            {dates.map((date) => {
+              const hasAvailability =
+                getAvailabilityWindows(resource, date, resourceConstraints).length > 0;
+              return (
+                <button
+                  aria-label={`${formatDate(date, {
+                    weekday: "long",
+                    month: "long",
+                    day: "numeric",
+                  })}: ${hasAvailability ? "availability configured" : "unavailable"}`}
+                  aria-pressed={date === selectedDate}
+                  className={[
+                    "week-date-option",
+                    date === selectedDate ? "active" : "",
+                    resourceConstraintsLoaded && !hasAvailability ? "unavailable-day" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={date}
+                  type="button"
+                  onClick={() => changeDate(date)}
+                >
+                  <span>{formatDate(date, { weekday: "short" })}</span>
+                  <strong>{formatDate(date, { day: "numeric" })}</strong>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div
           className={`calendar-time-grid ${dates.length === 1 ? "calendar-time-grid-day" : "calendar-time-grid-week"}`}
           style={{ "--calendar-day-count": dates.length } as CSSProperties}

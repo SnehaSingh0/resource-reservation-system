@@ -3617,3 +3617,172 @@ a:focus-visible {
     min-height: 2.5rem;
   }
 }
+
+.week-date-picker {
+  display: none;
+}
+
+.calendar-view-switch button:focus-visible,
+.week-date-option:focus-visible {
+  outline: 2px solid #527f62;
+  outline-offset: 1px;
+}
+
+@media (max-width: 900px) {
+  .calendar-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .calendar-resource-select {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .calendar-grid-scroll,
+  .month-calendar {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .date-availability {
+    width: 0.45rem;
+    height: 0.45rem;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .date-availability i {
+    width: 0.42rem;
+    height: 0.42rem;
+  }
+
+  .calendar-time-grid-week {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .calendar-time-grid-week > .time-grid-header,
+  .calendar-time-grid-week .timeline-day:not(.current) {
+    display: none;
+  }
+
+  .calendar-time-grid-week .time-grid-body {
+    grid-template-columns: 3.25rem minmax(0, 1fr);
+  }
+
+  .week-date-picker {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    padding: 0.5rem 0.65rem 0;
+  }
+
+  .week-date-option {
+    display: flex;
+    min-width: 0;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.2rem;
+    color: #5f6c7c;
+    border: 1px solid transparent;
+    border-radius: 0.35rem;
+    background: #fff;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .week-date-option span {
+    font-size: 0.65rem;
+    font-weight: 600;
+  }
+
+  .week-date-option strong {
+    display: grid;
+    width: 1.4rem;
+    height: 1.4rem;
+    place-items: center;
+    border-radius: 50%;
+    font-size: 0.72rem;
+  }
+
+  .week-date-option:hover {
+    background: #f5f8f6;
+  }
+
+  .week-date-option.active {
+    color: #294835;
+    border-color: #dce7df;
+    background: #f5f8f6;
+    font-weight: 600;
+  }
+
+  .week-date-option.active strong {
+    color: #fff;
+    background: #3f6f55;
+  }
+
+  .week-date-option.unavailable-day:not(.active) {
+    color: #858f9b;
+    background: #f7f8f9;
+  }
+
+  .calendar-resource-select select,
+  .range-controls select,
+  .range-controls input,
+  .reservation-calendar-page .reservation-date-picker-trigger,
+  .apply-range-button,
+  .calendar-view-switch button {
+    min-height: 2.75rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .calendar-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .selected-day-panel {
+    padding: 0.75rem;
+  }
+
+  .selected-day-heading {
+    gap: 0.5rem;
+  }
+
+  .selected-day-heading > div {
+    min-width: 0;
+  }
+
+  .selected-day-heading p {
+    line-height: 1.4;
+  }
+
+  .calendar-date-navigation {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .calendar-period-title {
+    flex: initial;
+    min-width: 0;
+    margin: 0;
+    font-size: 0.82rem;
+  }
+
+  .calendar-view-switch {
+    justify-self: stretch;
+  }
+
+  .week-date-picker {
+    padding-right: 0.35rem;
+    padding-left: 0.35rem;
+  }
+
+  .week-date-option {
+    min-height: 2.75rem;
+    padding: 0.15rem 0.05rem;
+  }
+}

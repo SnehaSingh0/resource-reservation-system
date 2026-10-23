@@ -40,6 +40,14 @@ const fullDayResource = {
   name: "All Day Hall",
 };
 
+type MockBooking = {
+  date: string;
+  start_time: string | null;
+  end_time: string | null;
+  is_full_day: boolean;
+  status: "CONFIRMED" | "PENDING" | "CANCELLED";
+};
+
 function createConstraints(
   resourceId: number,
   weekdays: number[],
@@ -59,6 +67,7 @@ function createConstraints(
 function mockReservationApi(
   resources: typeof timedResource[],
   constraintsByResource: Record<number, ReturnType<typeof createConstraints>>,
+  bookings: MockBooking[] = [],
 ) {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   vi.stubGlobal(
@@ -74,7 +83,7 @@ function mockReservationApi(
       } else if (constraintMatch) {
         body = constraintsByResource[Number(constraintMatch[1])] ?? [];
       } else if (url.includes("/availability/")) {
-        body = { bookings: [] };
+        body = { bookings };
       } else if (url.endsWith("/reservations/") && init?.method === "POST") {
         body = {
           id: 21,
@@ -313,6 +322,45 @@ describe("ResourcesPage reservation form", () => {
     });
   });
 
+  it("prevents selecting a time range that overlaps an existing reservation", async () => {
+    const reservationDate = shiftDateKey(projectDateKey(), 1);
+    mockReservationApi(
+      [timedResource],
+      {
+        [timedResource.id]: createConstraints(
+          timedResource.id,
+          [0, 1, 2, 3, 4, 5, 6],
+          false,
+        ),
+      },
+      [{
+        date: reservationDate,
+        start_time: "13:00:00",
+        end_time: "14:00:00",
+        is_full_day: false,
+        status: "CONFIRMED",
+      }],
+    );
+    renderResourcesPage();
+
+    await chooseReservationDate("Reserve date", reservationDate);
+    fireEvent.change(screen.getByLabelText("Start Time"), {
+      target: { value: "13:00" },
+    });
+    fireEvent.change(screen.getByLabelText("End Time"), {
+      target: { value: "14:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply range" }));
+
+    expect(
+      await screen.findByText(
+        "The selected time overlaps an existing reservation for Timed Room.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reserve" }).hasAttribute("disabled"))
+      .toBe(true);
+  });
+
   it("submits a permitted multi-day timed reservation using the selected boundary times", async () => {
     const constraints = [
       ...createConstraints(timedResource.id, [0, 1, 2, 3, 4, 5, 6], true),
@@ -361,6 +409,7 @@ describe("ResourcesPage reservation form", () => {
   });
 
   it("validates every day in a full-day date range against saved weekdays", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-20T12:00:00Z"));
     mockReservationApi([fullDayResource], {
       [fullDayResource.id]: createConstraints(fullDayResource.id, [0, 1, 2, 3, 4], true),
     });
@@ -596,5 +645,72 @@ describe("ResourcesPage reservation form", () => {
       ).not.toBe(initialMonth);
     });
     expect(screen.getByRole("button", { name: "Month" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("supports selecting a day within week view and switching calendar views", async () => {
+    mockReservationApi([timedResource], {
+      [timedResource.id]: createConstraints(
+        timedResource.id,
+        [0, 1, 2, 3, 4, 5, 6],
+        false,
+      ),
+    });
+    renderResourcesPage();
+
+    await screen.findByLabelText("Reserve date");
+    fireEvent.click(screen.getByRole("button", { name: "Week" }));
+
+    const weekDatePicker = await screen.findByRole("group", {
+      name: "Choose a day in this week",
+    });
+    const weekDates = within(weekDatePicker).getAllByRole("button");
+    expect(weekDates).toHaveLength(7);
+    const selectedDate = weekDates.find(
+      (button) => button.getAttribute("aria-pressed") === "true",
+    );
+    const nextDate = weekDates.find((button) => button !== selectedDate);
+    expect(selectedDate).toBeTruthy();
+    expect(nextDate).toBeTruthy();
+    if (!nextDate) throw new Error("No other day was present in the selected week.");
+
+    fireEvent.click(nextDate);
+    await waitFor(() => {
+      expect(
+        weekDates.filter((button) => button.getAttribute("aria-pressed") === "true"),
+      ).toHaveLength(1);
+      expect(nextDate.getAttribute("aria-pressed")).toBe("true");
+    });
+    expect(document.querySelectorAll(".timeline-day.current")).toHaveLength(1);
+
+    const selectedDayHeading = document.querySelector(
+      ".selected-day-heading p",
+    )?.textContent;
+    const currentWeekTitle = document.querySelector(
+      ".calendar-period-title",
+    )?.textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await waitFor(() => {
+      expect(document.querySelector(".calendar-period-title")?.textContent)
+        .not.toBe(currentWeekTitle);
+    });
+    expect(document.querySelector(".selected-day-heading p")?.textContent)
+      .not.toBe(selectedDayHeading);
+
+    fireEvent.click(screen.getByRole("button", { name: "Day" }));
+    expect(screen.getByRole("region", { name: "Day calendar timeline" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Choose a day in this week" })).toBeNull();
+    const currentDayTitle = document.querySelector(
+      ".selected-day-heading p",
+    )?.textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Next day" }));
+    await waitFor(() => {
+      expect(document.querySelector(".selected-day-heading p")?.textContent)
+        .not.toBe(currentDayTitle);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Month" }));
+    expect(screen.getByRole("region", { name: /availability$/i })).toBeTruthy();
+    expect(screen.getByLabelText("Start Time")).toBeTruthy();
+    expect(screen.getByLabelText("End Time")).toBeTruthy();
   });
 });
