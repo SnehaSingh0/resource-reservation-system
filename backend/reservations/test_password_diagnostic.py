@@ -78,6 +78,7 @@ class TemporaryPasswordVerificationDiagnosticTests(TestCase):
         with (
             patch.object(PBKDF2PasswordHasher, "iterations", 10),
             patch.object(PBKDF2PasswordHasher, "verify", record_verify),
+            patch("reservations.views.process_time_ns", side_effect=[100, 500]),
         ):
             response = client.post(
                 self.url,
@@ -95,6 +96,7 @@ class TemporaryPasswordVerificationDiagnosticTests(TestCase):
             set(response.data),
             {
                 "verification_duration_ms",
+                "process_cpu_duration_ms",
                 "hasher_algorithm",
                 "iterations",
                 "python_version",
@@ -103,6 +105,7 @@ class TemporaryPasswordVerificationDiagnosticTests(TestCase):
         )
         self.assertIsInstance(response.data["verification_duration_ms"], float)
         self.assertGreaterEqual(response.data["verification_duration_ms"], 0)
+        self.assertEqual(response.data["process_cpu_duration_ms"], 0.0004)
         self.assertEqual(response.data["hasher_algorithm"], "pbkdf2_sha256")
         self.assertEqual(response.data["iterations"], 10)
         self.assertEqual(response.data["python_version"], platform.python_version())

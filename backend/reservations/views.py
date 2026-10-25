@@ -8,7 +8,7 @@ import ssl
 import traceback
 from datetime import time, timedelta
 from functools import wraps
-from time import perf_counter_ns
+from time import perf_counter_ns, process_time_ns
 
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout
@@ -189,13 +189,17 @@ class TemporaryPasswordVerificationDiagnosticView(APIView):
     permission_classes = [IsAdminUser]
 
     @sensitive_variables("synthetic_password", "encoded_password")
-    def post(self, request):
+    def post(self, _request):
         synthetic_password = secrets.token_urlsafe(32)
         encoded_password = make_password(synthetic_password)
         hasher = identify_hasher(encoded_password)
 
         verification_started_at = perf_counter_ns()
+        process_started_at = process_time_ns()
         verification_succeeded = hasher.verify(synthetic_password, encoded_password)
+        process_duration_ms = (
+            process_time_ns() - process_started_at
+        ) / 1_000_000
         verification_duration_ms = (
             perf_counter_ns() - verification_started_at
         ) / 1_000_000
@@ -204,6 +208,7 @@ class TemporaryPasswordVerificationDiagnosticView(APIView):
 
         diagnostic = {
             "verification_duration_ms": verification_duration_ms,
+            "process_cpu_duration_ms": process_duration_ms,
             "hasher_algorithm": hasher.algorithm,
             "python_version": platform.python_version(),
             "openssl_version": ssl.OPENSSL_VERSION,
