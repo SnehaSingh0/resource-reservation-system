@@ -41,6 +41,44 @@ class TimedModelBackendTests(TestCase):
         self.assert_timing_log_is_safe(captured.output)
 
     @override_settings(REQUEST_TIMING_ENABLED=True)
+    @patch("reservations.authentication.process_time_ns", side_effect=[0, 400_000_000])
+    @patch(
+        "reservations.authentication.perf_counter_ns",
+        side_effect=[
+            0,
+            1_000_000,
+            3_000_000,
+            10_000_000,
+            610_000_000,
+            700_000_000,
+        ],
+    )
+    @patch(
+        "reservations.authentication.check_password_with_timing_attack_mitigation",
+        return_value=True,
+    )
+    def test_logs_exact_wall_and_process_cpu_password_check_durations(
+        self,
+        password_check,
+        _perf_counter,
+        _process_time,
+    ):
+        with self.assertLogs("reservations.request_timing", level="INFO") as captured:
+            user = self.backend.authenticate(
+                None,
+                email="timing-user@example.test",
+                password="correct-test-password",
+            )
+
+        self.assertEqual(user, self.user)
+        password_check.assert_called_once_with(self.user, "correct-test-password")
+        self.assertIn(
+            "user_lookup_ms=2.00 password_check_ms=600.00 "
+            "password_check_cpu_ms=400.00 backend_total_ms=700.00",
+            captured.output[0],
+        )
+
+    @override_settings(REQUEST_TIMING_ENABLED=True)
     def test_incorrect_password_is_rejected_and_timed(self):
         with self.assertLogs("reservations.request_timing", level="INFO") as captured:
             user = self.backend.authenticate(
@@ -137,6 +175,7 @@ class TimedModelBackendTests(TestCase):
         log_line = "\n".join(output)
         self.assertIn("user_lookup_ms=", log_line)
         self.assertIn("password_check_ms=", log_line)
+        self.assertIn("password_check_cpu_ms=", log_line)
         self.assertIn("backend_total_ms=", log_line)
         self.assertNotIn("timing-user@example.test", log_line)
         self.assertNotIn("unknown-timing-user@example.test", log_line)

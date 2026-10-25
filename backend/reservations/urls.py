@@ -18,7 +18,6 @@ from .views import (
     ResourceListCreateView,
     ReservationDetailView,
     ReservationListCreateView,
-    TemporaryPasswordVerificationDiagnosticView,
     UserListView,
 )
 
@@ -26,12 +25,6 @@ urlpatterns = [
     path("auth/register/", RegisterUserView.as_view(), name="auth-register"),
     path("auth/csrf/", CsrfTokenView.as_view(), name="auth-csrf"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
-    # Temporary: remove this route and import, then delete its view after investigation.
-    path(
-        "auth/temporary-password-diagnostic/",
-        TemporaryPasswordVerificationDiagnosticView.as_view(),
-        name="temporary-password-diagnostic",
-    ),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("users/me/", CurrentUserView.as_view(), name="user-me"),
     path("users/", UserListView.as_view(), name="user-list"),

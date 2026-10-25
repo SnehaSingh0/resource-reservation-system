@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import logging
-import platform
 import re
-import secrets
-import ssl
 import traceback
 from datetime import time, timedelta
 from functools import wraps
@@ -12,7 +9,6 @@ from time import perf_counter_ns, process_time_ns
 
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout
-from django.contrib.auth.hashers import identify_hasher, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import validate_email
 from django.db import transaction
@@ -23,7 +19,6 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
-from django.views.decorators.debug import sensitive_variables
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -180,44 +175,6 @@ class CsrfTokenView(APIView):
                 "csrfToken": get_token(request),
             }
         )
-
-
-@method_decorator(csrf_protect, name="dispatch")
-class TemporaryPasswordVerificationDiagnosticView(APIView):
-    """Temporary benchmark; remove this view and its URL after investigation."""
-
-    permission_classes = [IsAdminUser]
-
-    @sensitive_variables("synthetic_password", "encoded_password")
-    def post(self, _request):
-        synthetic_password = secrets.token_urlsafe(32)
-        encoded_password = make_password(synthetic_password)
-        hasher = identify_hasher(encoded_password)
-
-        verification_started_at = perf_counter_ns()
-        process_started_at = process_time_ns()
-        verification_succeeded = hasher.verify(synthetic_password, encoded_password)
-        process_duration_ms = (
-            process_time_ns() - process_started_at
-        ) / 1_000_000
-        verification_duration_ms = (
-            perf_counter_ns() - verification_started_at
-        ) / 1_000_000
-        if not verification_succeeded:
-            raise RuntimeError("Synthetic password verification failed.")
-
-        diagnostic = {
-            "verification_duration_ms": verification_duration_ms,
-            "process_cpu_duration_ms": process_duration_ms,
-            "hasher_algorithm": hasher.algorithm,
-            "python_version": platform.python_version(),
-            "openssl_version": ssl.OPENSSL_VERSION,
-        }
-        iterations = getattr(hasher, "iterations", None)
-        if iterations is not None:
-            diagnostic["iterations"] = iterations
-
-        return Response(diagnostic)
 
 
 @method_decorator(csrf_protect, name="dispatch")

@@ -1,5 +1,5 @@
 import logging
-from time import perf_counter_ns
+from time import perf_counter_ns, process_time_ns
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -43,6 +43,7 @@ class TimedModelBackend(ModelBackend):
         total_started_at = perf_counter_ns()
         lookup_duration_ns = 0
         password_duration_ns = 0
+        password_cpu_duration_ns = 0
         try:
             user_model = get_user_model()
             if username is None:
@@ -59,12 +60,16 @@ class TimedModelBackend(ModelBackend):
                 lookup_duration_ns = perf_counter_ns() - lookup_started_at
 
             password_started_at = perf_counter_ns()
+            password_cpu_started_at = process_time_ns()
             try:
                 password_valid = check_password_with_timing_attack_mitigation(
                     user,
                     password,
                 )
             finally:
+                password_cpu_duration_ns = (
+                    process_time_ns() - password_cpu_started_at
+                )
                 password_duration_ns = perf_counter_ns() - password_started_at
 
             if password_valid and self.user_can_authenticate(user):
@@ -73,8 +78,10 @@ class TimedModelBackend(ModelBackend):
             total_duration_ns = perf_counter_ns() - total_started_at
             timing_logger.info(
                 "login_phase=authenticate_breakdown "
-                "user_lookup_ms=%.2f password_check_ms=%.2f backend_total_ms=%.2f",
+                "user_lookup_ms=%.2f password_check_ms=%.2f "
+                "password_check_cpu_ms=%.2f backend_total_ms=%.2f",
                 lookup_duration_ns / 1_000_000,
                 password_duration_ns / 1_000_000,
+                password_cpu_duration_ns / 1_000_000,
                 total_duration_ns / 1_000_000,
             )
