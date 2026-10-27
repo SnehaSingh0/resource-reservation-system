@@ -97,6 +97,54 @@ class RequestTimingSqlMiddlewareTests(TestCase):
             self.assertNotIn(sensitive_value, "\n".join(captured.output))
 
     @override_settings(REQUEST_TIMING_ENABLED=True)
+    def test_logs_reservation_get_and_post_sql_without_sensitive_values(self):
+        from django.db import connection
+
+        sensitive_values = (
+            "personal@example.com",
+            "password-secret",
+            "session-secret",
+            "inline-secret",
+        )
+        for method in ("GET", "POST"):
+            with self.subTest(method=method):
+                request = getattr(RequestFactory(), method.lower())(
+                    "/api/reservations/"
+                )
+                request.resolver_match = resolve("/api/reservations/")
+
+                def get_response(_request):
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT %s, 'inline-secret', 'personal@example.com'",
+                            ["password-secret session-secret"],
+                        )
+                    return HttpResponse("response")
+
+                middleware = RequestTimingMiddleware(get_response)
+                with self.assertLogs(
+                    "reservations.request_timing", level="INFO"
+                ) as captured:
+                    middleware(request)
+
+                query_logs = [
+                    line for line in captured.output if "sql_query=" in line
+                ]
+                self.assertEqual(len(query_logs), 1)
+                self.assertRegex(
+                    query_logs[0],
+                    r"sql_query=1 sql_duration_ms=\d+\.\d{2}",
+                )
+                self.assertIn(
+                    "sql=SELECT %s, ?, ?", query_logs[0]
+                )
+                aggregate_log = captured.output[-1]
+                self.assertIn("sql_query_count=1", aggregate_log)
+                self.assertRegex(aggregate_log, r"sql_duration_ms=\d+\.\d{2}")
+                for sensitive_value in sensitive_values:
+                    self.assertNotIn(sensitive_value, "\n".join(captured.output))
+
+    @override_settings(REQUEST_TIMING_ENABLED=True)
     def test_logs_aggregate_sql_timing_without_sql_or_parameters(self):
         from django.db import connection
 

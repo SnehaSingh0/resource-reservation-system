@@ -38,6 +38,9 @@ class RequestTimingMiddleware:
         sql_metrics = {"query_count": 0, "duration_ns": 0}
         log_sql_statements = (
             request.method == "GET" and request.path_info == "/api/resources/"
+        ) or (
+            request.method in {"GET", "POST"}
+            and request.path_info == "/api/reservations/"
         )
 
         def time_query(execute, sql, params, many, context):
